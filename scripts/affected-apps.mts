@@ -1,15 +1,10 @@
 import { execFile } from 'node:child_process';
 import { appendFile, readFile, readdir } from 'node:fs/promises';
 import { basename, join, posix, resolve } from 'node:path';
-import { promisify } from 'node:util';
+import { isDeepStrictEqual, promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { parse as parseYaml } from 'yaml';
-
-export interface ChangedPath {
-  path: string;
-  status: 'A' | 'D' | 'M';
-}
 
 interface WorkspacePackage {
   dependencies: string[];
@@ -40,7 +35,7 @@ export interface SelectionResult {
 export interface SelectionInput {
   after: WorkspaceSnapshot;
   before?: WorkspaceSnapshot;
-  changes: ChangedPath[];
+  changes: string[];
   fallbackReason?: string;
 }
 
@@ -175,22 +170,8 @@ export async function loadWorkspaceSnapshot(root: string): Promise<WorkspaceSnap
   };
 }
 
-function stableValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableValue);
-  }
-  if (typeof value !== 'object' || value === null) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, stableValue(entry)]),
-  );
-}
-
 function importerChanged(before: unknown, after: unknown): boolean {
-  return JSON.stringify(stableValue(before)) !== JSON.stringify(stableValue(after));
+  return !isDeepStrictEqual(before, after);
 }
 
 function isDocumentationPath(path: string): boolean {
@@ -225,11 +206,10 @@ function combinedPackages(before: WorkspaceSnapshot | undefined, after: Workspac
   return packagesByName;
 }
 
-function dependentApps(
-  packageName: string,
+function createDependentAppsResolver(
   before: WorkspaceSnapshot | undefined,
   after: WorkspaceSnapshot,
-): WorkspacePackage[] {
+): (packageName: string) => WorkspacePackage[] {
   const packagesByName = combinedPackages(before, after);
   const reverseDependencies = new Map<string, Set<string>>();
 
@@ -249,31 +229,42 @@ function dependentApps(
   const currentAppsByName = new Map(
     currentApps(after).map((workspacePackage) => [workspacePackage.name, workspacePackage]),
   );
-  const selected = new Map<string, WorkspacePackage>();
-  const visited = new Set([packageName]);
-  const queue = [packageName];
+  const cache = new Map<string, WorkspacePackage[]>();
 
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
+  return (packageName) => {
+    const cached = cache.get(packageName);
+    if (cached) {
+      return cached;
     }
-    for (const dependent of reverseDependencies.get(current) ?? []) {
-      if (visited.has(dependent)) {
+
+    const selected = new Map<string, WorkspacePackage>();
+    const visited = new Set([packageName]);
+    const queue = [packageName];
+
+    for (let index = 0; index < queue.length; index += 1) {
+      const current = queue[index];
+      if (!current) {
         continue;
       }
-      visited.add(dependent);
-      queue.push(dependent);
-      const app = currentAppsByName.get(dependent);
-      if (app) {
-        selected.set(app.name, app);
+      for (const dependent of reverseDependencies.get(current) ?? []) {
+        if (visited.has(dependent)) {
+          continue;
+        }
+        visited.add(dependent);
+        queue.push(dependent);
+        const app = currentAppsByName.get(dependent);
+        if (app) {
+          selected.set(app.name, app);
+        }
       }
     }
-  }
 
-  return [...selected.values()].sort((left, right) =>
-    left.directory.localeCompare(right.directory),
-  );
+    const apps = [...selected.values()].sort((left, right) =>
+      left.directory.localeCompare(right.directory),
+    );
+    cache.set(packageName, apps);
+    return apps;
+  };
 }
 
 function allAppsResult(after: WorkspaceSnapshot, reason: string): SelectionResult {
@@ -318,17 +309,16 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
     appReasons.add(reason);
     reasons.set(app.directory, appReasons);
   };
+  let resolveDependentApps: ((packageName: string) => WorkspacePackage[]) | undefined;
   const addDependents = (workspacePackage: WorkspacePackage, reason: string) => {
-    for (const app of dependentApps(workspacePackage.name, input.before, input.after)) {
+    resolveDependentApps ??= createDependentAppsResolver(input.before, input.after);
+    for (const app of resolveDependentApps(workspacePackage.name)) {
       addApp(app, `${reason}: ${workspacePackage.name}`);
     }
   };
 
-  const normalizedChanges = input.changes.map((entry) => ({
-    path: normalizePath(entry.path),
-    status: entry.status,
-  }));
-  const lockfileChanged = normalizedChanges.some(({ path }) => path === 'pnpm-lock.yaml');
+  const normalizedChanges = input.changes.map(normalizePath);
+  const lockfileChanged = normalizedChanges.includes('pnpm-lock.yaml');
 
   if (lockfileChanged) {
     if (
@@ -380,28 +370,28 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
     }
   }
 
-  for (const change of normalizedChanges) {
-    if (change.path === 'pnpm-lock.yaml') {
+  for (const path of normalizedChanges) {
+    if (path === 'pnpm-lock.yaml') {
       continue;
     }
-    if (isDocumentationPath(change.path)) {
+    if (isDocumentationPath(path)) {
       continue;
     }
-    if (isGlobalBuildInput(change.path)) {
-      return allAppsResult(input.after, `global build input changed: ${change.path}`);
+    if (isGlobalBuildInput(path)) {
+      return allAppsResult(input.after, `global build input changed: ${path}`);
     }
 
-    const segments = change.path.split('/');
+    const segments = path.split('/');
     if ((segments[0] === 'apps' || segments[0] === 'packages') && segments[1]) {
       const directory = `${segments[0]}/${segments[1]}`;
       const workspacePackage = packagesByDirectory.get(directory);
       if (!workspacePackage) {
-        return allAppsResult(input.after, `unknown workspace path changed: ${change.path}`);
+        return allAppsResult(input.after, `unknown workspace path changed: ${path}`);
       }
       if (workspacePackage.kind === 'app') {
         const currentApp = currentPackagesByDirectory.get(directory);
         if (currentApp?.kind === 'app') {
-          addApp(currentApp, `app-owned path changed: ${change.path}`);
+          addApp(currentApp, `app-owned path changed: ${path}`);
         } else {
           omissions.add(`deleted app omitted: ${directory}`);
         }
@@ -411,7 +401,7 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
       continue;
     }
 
-    return allAppsResult(input.after, `unknown path changed: ${change.path}`);
+    return allAppsResult(input.after, `unknown path changed: ${path}`);
   }
 
   const apps = [...selected.values()].sort((left, right) =>
@@ -421,8 +411,15 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
     apps.map((app) => [basename(app.directory), [...(reasons.get(app.directory) ?? [])].sort()]),
   );
   const onlyDocumentation =
-    normalizedChanges.length > 0 &&
-    normalizedChanges.every(({ path }) => isDocumentationPath(path));
+    normalizedChanges.length > 0 && normalizedChanges.every(isDocumentationPath);
+  let summary = 'No current application is affected.';
+  if (apps.length > 0) {
+    summary = `Selected ${String(apps.length)} affected app${apps.length === 1 ? '' : 's'}.`;
+  } else if (onlyDocumentation) {
+    summary = 'Documentation-only change; no app validation is required.';
+  } else if (omissions.size > 0) {
+    summary = `No current application is affected; ${[...omissions].sort().join('; ')}.`;
+  }
 
   return {
     count: apps.length,
@@ -434,14 +431,7 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
       })),
     },
     reasons: reasonRecord,
-    summary:
-      apps.length > 0
-        ? `Selected ${String(apps.length)} affected app${apps.length === 1 ? '' : 's'}.`
-        : onlyDocumentation
-          ? 'Documentation-only change; no app validation is required.'
-          : omissions.size > 0
-            ? `No current application is affected; ${[...omissions].sort().join('; ')}.`
-            : 'No current application is affected.',
+    summary,
   };
 }
 
@@ -492,9 +482,9 @@ async function loadGitSnapshot(revision: string): Promise<WorkspaceSnapshot> {
   return { ...lockfile, packages };
 }
 
-function parseNameStatus(output: string): ChangedPath[] {
+function parseNameStatus(output: string): string[] {
   const entries = output.split('\0');
-  const changes: ChangedPath[] = [];
+  const changes: string[] = [];
   for (let index = 0; index < entries.length - 1; index += 2) {
     const rawStatus = entries[index] ?? '';
     const path = entries[index + 1] ?? '';
@@ -502,7 +492,7 @@ function parseNameStatus(output: string): ChangedPath[] {
     if (!path || (status !== 'A' && status !== 'D' && status !== 'M')) {
       throw new Error(`Git returned an unsupported change entry: ${rawStatus} ${path}`);
     }
-    changes.push({ path, status });
+    changes.push(path);
   }
   return changes;
 }

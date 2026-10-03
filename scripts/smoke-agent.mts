@@ -37,7 +37,6 @@ export interface SmokeOptions {
 interface AppMetadata {
   agentId: string;
   appId: string;
-  packageName: string;
 }
 
 interface ContainerState {
@@ -125,7 +124,6 @@ async function loadAppMetadata(appName: string): Promise<AppMetadata> {
   return {
     agentId: metadata.agentId,
     appId: metadata.appId,
-    packageName: metadata.packageName,
   };
 }
 

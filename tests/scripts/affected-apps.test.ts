@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   loadWorkspaceSnapshot,
   selectAffectedApps,
-  type ChangedPath,
   type WorkspaceSnapshot,
 } from '../../scripts/affected-apps.mjs';
 
@@ -70,13 +69,9 @@ async function createFixture(options: FixtureOptions = {}): Promise<WorkspaceSna
   return loadWorkspaceSnapshot(root);
 }
 
-function change(path: string, status: ChangedPath['status'] = 'M'): ChangedPath {
-  return { path, status };
-}
-
 function selectedApps(
   after: WorkspaceSnapshot,
-  changes: ChangedPath[],
+  changes: string[],
   before?: WorkspaceSnapshot,
 ): string[] {
   return selectAffectedApps(
@@ -94,9 +89,9 @@ describe('affected application selection', () => {
   it('selects only the owner of an app source change', async () => {
     const snapshot = await createFixture();
 
-    expect(
-      selectedApps(snapshot, [change('apps/researcher-agent/src/mastra/index.ts')], snapshot),
-    ).toEqual(['researcher-agent']);
+    expect(selectedApps(snapshot, ['apps/researcher-agent/src/mastra/index.ts'], snapshot)).toEqual(
+      ['researcher-agent'],
+    );
   });
 
   it('keeps an app manifest and importer-specific lockfile change narrow', async () => {
@@ -118,7 +113,7 @@ describe('affected application selection', () => {
     const result = selectAffectedApps({
       after,
       before,
-      changes: [change('apps/researcher-agent/package.json'), change('pnpm-lock.yaml')],
+      changes: ['apps/researcher-agent/package.json', 'pnpm-lock.yaml'],
     });
 
     expect(result.matrix.include.map(({ app }) => app)).toEqual(['researcher-agent']);
@@ -146,7 +141,7 @@ describe('affected application selection', () => {
     const result = selectAffectedApps({
       after: snapshot,
       before: snapshot,
-      changes: [change('packages/shared-kit/src/index.ts')],
+      changes: ['packages/shared-kit/src/index.ts'],
     });
 
     expect(result.matrix.include.map(({ app }) => app)).toEqual([
@@ -190,7 +185,7 @@ describe('affected application selection', () => {
     const result = selectAffectedApps({
       after,
       before,
-      changes: [change('pnpm-lock.yaml')],
+      changes: ['pnpm-lock.yaml'],
     });
 
     expect(result.matrix.include.map(({ app }) => app)).toEqual([
@@ -205,7 +200,7 @@ describe('affected application selection', () => {
   it('selects every app for a global build input', async () => {
     const snapshot = await createFixture();
 
-    expect(selectedApps(snapshot, [change('tsconfig.base.json')], snapshot)).toEqual([
+    expect(selectedApps(snapshot, ['tsconfig.base.json'], snapshot)).toEqual([
       'researcher-agent',
       'writer-agent',
     ]);
@@ -216,7 +211,7 @@ describe('affected application selection', () => {
     const result = selectAffectedApps({
       after: snapshot,
       before: snapshot,
-      changes: [change('README.md'), change('docs/architecture.md')],
+      changes: ['README.md', 'docs/architecture.md'],
     });
 
     expect(result).toMatchObject({ count: 0, matrix: { include: [] } });
@@ -244,7 +239,7 @@ describe('affected application selection', () => {
     });
     const after = await createFixture();
 
-    expect(selectedApps(after, [change('apps/writer-agent/package.json', 'A')], before)).toEqual([
+    expect(selectedApps(after, ['apps/writer-agent/package.json'], before)).toEqual([
       'writer-agent',
     ]);
   });
@@ -258,7 +253,7 @@ describe('affected application selection', () => {
     const result = selectAffectedApps({
       after,
       before,
-      changes: [change('apps/writer-agent/package.json', 'D')],
+      changes: ['apps/writer-agent/package.json'],
     });
 
     expect(result.matrix.include).toEqual([]);
@@ -276,10 +271,7 @@ describe('affected application selection', () => {
     expect(
       selectedApps(
         after,
-        [
-          change('apps/researcher-agent/package.json', 'D'),
-          change('apps/writer-agent/package.json', 'A'),
-        ],
+        ['apps/researcher-agent/package.json', 'apps/writer-agent/package.json'],
         before,
       ),
     ).toEqual(['writer-agent']);
@@ -290,7 +282,7 @@ describe('affected application selection', () => {
     const result = selectAffectedApps({
       after: snapshot,
       before: snapshot,
-      changes: [change('infrastructure/unclassified.conf')],
+      changes: ['infrastructure/unclassified.conf'],
     });
 
     expect(result.matrix.include.map(({ app }) => app)).toEqual([
@@ -311,7 +303,7 @@ describe('affected application selection', () => {
     const result = selectAffectedApps({
       after: uncertain,
       before: snapshot,
-      changes: [change('pnpm-lock.yaml')],
+      changes: ['pnpm-lock.yaml'],
     });
 
     expect(result.matrix.include.map(({ app }) => app)).toEqual([
