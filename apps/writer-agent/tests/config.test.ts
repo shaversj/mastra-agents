@@ -19,6 +19,16 @@ describe('app config', () => {
     });
   });
 
+  it('permits the container wildcard binding only when explicitly configured', () => {
+    expect(loadAppConfig({ MODEL_ID: 'openai/gpt-4o-mini', HOST: '0.0.0.0' })).toMatchObject({
+      host: '0.0.0.0',
+    });
+
+    expect(() =>
+      loadAppConfig({ MODEL_ID: 'openai/gpt-4o-mini', HOST: '192.0.2.10' }),
+    ).toThrowError('Invalid environment variable: HOST (expected 127.0.0.1 or 0.0.0.0)');
+  });
+
   it('names MODEL_ID without exposing another environment value', () => {
     const secret = 'do-not-print-this';
 

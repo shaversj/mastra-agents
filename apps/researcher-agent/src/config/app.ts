@@ -8,7 +8,7 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 export interface AppConfig {
   modelId: string;
-  host: '127.0.0.1';
+  host: '127.0.0.1' | '0.0.0.0';
   port: number;
 }
 
@@ -20,8 +20,8 @@ export function loadAppConfig(environment: Environment = process.env): AppConfig
   }
 
   const host = environment.HOST?.trim() || '127.0.0.1';
-  if (host !== '127.0.0.1') {
-    throw new Error('Invalid environment variable: HOST (expected 127.0.0.1)');
+  if (host !== '127.0.0.1' && host !== '0.0.0.0') {
+    throw new Error('Invalid environment variable: HOST (expected 127.0.0.1 or 0.0.0.0)');
   }
 
   const portValue = environment.PORT?.trim() || '4111';

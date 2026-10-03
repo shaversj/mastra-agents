@@ -21,6 +21,8 @@
     "preflight": "mastra lint --preflight",
     "preflight:built": "mastra lint --preflight --skip-build",
     "test:server": "tsx scripts/smoke-generated-server.ts",
+    "image:build": "docker build --file Dockerfile --tag mastra-agents/writer-agent:local ../..",
+    "image:smoke": "pnpm image:build && tsx ../../scripts/smoke-agent.mts --app writer-agent --image mastra-agents/writer-agent:local",
     "check": "MODEL_ID=openai/gpt-4o-mini pnpm run check:configured",
     "check:configured": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm config:check && pnpm test && pnpm build && pnpm preflight:built && pnpm test:server"
   },
