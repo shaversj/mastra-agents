@@ -92,6 +92,9 @@ describe('affected application selection', () => {
     expect(selectedApps(snapshot, ['apps/researcher-agent/src/mastra/index.ts'], snapshot)).toEqual(
       ['researcher-agent'],
     );
+    expect(selectedApps(snapshot, ['apps/researcher-agent/src/prompt.md'], snapshot)).toEqual([
+      'researcher-agent',
+    ]);
   });
 
   it('keeps an app manifest and importer-specific lockfile change narrow', async () => {

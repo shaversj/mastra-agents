@@ -374,9 +374,6 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
     if (path === 'pnpm-lock.yaml') {
       continue;
     }
-    if (isDocumentationPath(path)) {
-      continue;
-    }
     if (isGlobalBuildInput(path)) {
       return allAppsResult(input.after, `global build input changed: ${path}`);
     }
@@ -400,6 +397,9 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
       }
       continue;
     }
+    if (isDocumentationPath(path)) {
+      continue;
+    }
 
     return allAppsResult(input.after, `unknown path changed: ${path}`);
   }
@@ -411,7 +411,14 @@ export function selectAffectedApps(input: SelectionInput): SelectionResult {
     apps.map((app) => [basename(app.directory), [...(reasons.get(app.directory) ?? [])].sort()]),
   );
   const onlyDocumentation =
-    normalizedChanges.length > 0 && normalizedChanges.every(isDocumentationPath);
+    normalizedChanges.length > 0 &&
+    normalizedChanges.every(
+      (path) =>
+        isDocumentationPath(path) &&
+        !isGlobalBuildInput(path) &&
+        !path.startsWith('apps/') &&
+        !path.startsWith('packages/'),
+    );
   let summary = 'No current application is affected.';
   if (apps.length > 0) {
     summary = `Selected ${String(apps.length)} affected app${apps.length === 1 ? '' : 's'}.`;

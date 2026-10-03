@@ -7,7 +7,6 @@ RUN npm install --global pnpm@10.32.1
 WORKDIR /workspace
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY apps/researcher-agent/package.json apps/researcher-agent/package.json
 COPY apps/writer-agent/package.json apps/writer-agent/package.json
 
 RUN pnpm install --frozen-lockfile --filter @mastra-agents/writer-agent...
