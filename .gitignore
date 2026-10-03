@@ -1,0 +1,15 @@
+node_modules/
+.pnpm-store/
+
+.env
+.env.*
+!.env.example
+
+.mastra/
+dist/
+coverage/
+
+*.log
+.DS_Store
+.idea/
+.vscode/
