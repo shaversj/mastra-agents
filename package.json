@@ -9,12 +9,13 @@
     "pnpm": "10.32.1"
   },
   "scripts": {
+    "affected:apps": "tsx scripts/affected-apps.mts",
     "build": "pnpm -r --if-present run build",
     "check": "pnpm check:repo && pnpm -r --if-present run check",
     "check:repo": "pnpm format:check:repo && pnpm lint:repo && pnpm typecheck:repo && pnpm test:repo",
     "format": "prettier --write .",
     "format:check": "pnpm format:check:repo && pnpm -r --if-present run format:check",
-    "format:check:repo": "prettier --check package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js prettier.config.mjs vitest.workspace.ts",
+    "format:check:repo": "prettier --check package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js prettier.config.mjs vitest.workspace.ts scripts tests .github",
     "lint": "eslint .",
     "lint:repo": "eslint . --ignore-pattern 'apps/**' --ignore-pattern 'packages/**'",
     "test": "vitest run --config vitest.workspace.ts",
@@ -31,6 +32,7 @@
     "tsx": "4.20.6",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.0",
-    "vitest": "5.0.3"
+    "vitest": "5.0.3",
+    "yaml": "2.9.1"
   }
 }

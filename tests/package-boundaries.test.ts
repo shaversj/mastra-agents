@@ -102,9 +102,7 @@ async function packageBoundaryViolations(workspaceRoot: string): Promise<string[
   );
   const namedWorkspacePackages = workspacePackages
     .filter(({ manifest }) => manifest.name)
-    .sort(
-      (left, right) => (right.manifest.name?.length ?? 0) - (left.manifest.name?.length ?? 0),
-    );
+    .sort((left, right) => (right.manifest.name?.length ?? 0) - (left.manifest.name?.length ?? 0));
   const violations: string[] = [];
 
   for (const { appRoot, manifest: appManifest } of workspaceApps) {
