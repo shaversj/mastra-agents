@@ -6,6 +6,7 @@ import { appMetadata } from '../src/config/app.js';
 
 const startupTimeoutMs = 10_000;
 const shutdownTimeoutMs = 10_000;
+const outputLimitBytes = 64 * 1024;
 
 async function getAvailablePort(): Promise<number> {
   const server = createServer();
@@ -33,7 +34,9 @@ async function waitForHealth(baseUrl: string, childExit: Promise<never>): Promis
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/health`);
+      const response = await fetch(`${baseUrl}/health`, {
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      });
       if (response.ok) {
         const body: unknown = await response.json();
         if (
@@ -44,6 +47,8 @@ async function waitForHealth(baseUrl: string, childExit: Promise<never>): Promis
         ) {
           return;
         }
+      } else {
+        await response.body?.cancel();
       }
     } catch {
       // The generated process may need a moment before it accepts connections.
@@ -61,7 +66,10 @@ async function stopServer(
 ): Promise<void> {
   child.kill('SIGTERM');
 
-  const result = await Promise.race([exit, delay(shutdownTimeoutMs).then(() => undefined)]);
+  const result = await Promise.race([
+    exit,
+    delay(shutdownTimeoutMs, undefined, { ref: false }).then(() => undefined),
+  ]);
 
   if (!result) {
     child.kill('SIGKILL');
@@ -91,11 +99,20 @@ const child = spawn(process.execPath, ['.mastra/output/index.mjs'], {
 });
 
 let output = '';
-child.stdout.on('data', (chunk: Buffer) => {
+let outputTruncated = false;
+function captureOutput(chunk: Buffer): void {
   output += chunk.toString();
+  if (Buffer.byteLength(output) > outputLimitBytes) {
+    output = output.slice(-outputLimitBytes);
+    outputTruncated = true;
+  }
+}
+
+child.stdout.on('data', (chunk: Buffer) => {
+  captureOutput(chunk);
 });
 child.stderr.on('data', (chunk: Buffer) => {
-  output += chunk.toString();
+  captureOutput(chunk);
 });
 
 const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
@@ -103,16 +120,18 @@ const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>
 });
 const earlyExit = exit.then((result) => {
   throw new Error(
-    `Generated server exited before the probes completed (code=${String(result.code)}, signal=${String(result.signal)})\n${output}`,
+    `Generated server exited before the probes completed (code=${String(result.code)}, signal=${String(result.signal)})\n${outputTruncated ? '[earlier output truncated]\n' : ''}${output}`,
   );
 });
 
-let stopped = false;
 try {
   await waitForHealth(baseUrl, earlyExit);
 
-  const agentsResponse = await fetch(`${baseUrl}/api/agents`);
+  const agentsResponse = await fetch(`${baseUrl}/api/agents`, {
+    signal: AbortSignal.timeout(startupTimeoutMs),
+  });
   if (!agentsResponse.ok) {
+    await agentsResponse.body?.cancel();
     throw new Error(`/api/agents returned HTTP ${String(agentsResponse.status)}`);
   }
 
@@ -127,12 +146,11 @@ try {
   }
 
   await stopServer(child, exit);
-  stopped = true;
   console.log(
     `Generated server passed model-free probes on loopback for ${appMetadata.agentId} and exited after SIGTERM`,
   );
 } finally {
-  if (!stopped && child.exitCode === null && child.signalCode === null) {
+  if (child.exitCode === null && child.signalCode === null) {
     child.kill('SIGKILL');
   }
 }

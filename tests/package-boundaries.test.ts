@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { preProcessFile } from 'typescript';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 
 interface PackageManifest {
   name?: string;
@@ -14,8 +14,6 @@ interface PackageManifest {
   peerDependencies?: Record<string, string>;
   exports?: unknown;
 }
-
-const fixtureRoots: string[] = [];
 
 async function readManifest(path: string): Promise<PackageManifest> {
   return JSON.parse(await readFile(path, 'utf8')) as PackageManifest;
@@ -102,6 +100,11 @@ async function packageBoundaryViolations(workspaceRoot: string): Promise<string[
       manifest: await readManifest(join(packageRoot, 'package.json')),
     })),
   );
+  const namedWorkspacePackages = workspacePackages
+    .filter(({ manifest }) => manifest.name)
+    .sort(
+      (left, right) => (right.manifest.name?.length ?? 0) - (left.manifest.name?.length ?? 0),
+    );
   const violations: string[] = [];
 
   for (const { appRoot, manifest: appManifest } of workspaceApps) {
@@ -156,15 +159,10 @@ async function packageBoundaryViolations(workspaceRoot: string): Promise<string[
           continue;
         }
 
-        const workspacePackage = workspacePackages
-          .filter(({ manifest }) => manifest.name)
-          .sort(
-            (left, right) => (right.manifest.name?.length ?? 0) - (left.manifest.name?.length ?? 0),
-          )
-          .find(
-            ({ manifest }) =>
-              specifier === manifest.name || specifier.startsWith(`${manifest.name}/`),
-          );
+        const workspacePackage = namedWorkspacePackages.find(
+          ({ manifest }) =>
+            specifier === manifest.name || specifier.startsWith(`${manifest.name}/`),
+        );
 
         if (!workspacePackage?.manifest.name) {
           continue;
@@ -192,7 +190,7 @@ async function packageBoundaryViolations(workspaceRoot: string): Promise<string[
 
 async function createFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'mastra-package-boundaries-'));
-  fixtureRoots.push(root);
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
   return root;
 }
 
@@ -201,12 +199,6 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-afterEach(async () => {
-  await Promise.all(
-    fixtureRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  );
-});
-
 describe('package boundaries', () => {
   it('keeps the actual applications isolated', async () => {
     const workspaceRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -214,7 +206,7 @@ describe('package boundaries', () => {
     await expect(packageBoundaryViolations(workspaceRoot)).resolves.toEqual([]);
   });
 
-  it('rejects a relative import into a sibling application', async () => {
+  it('rejects imports from a sibling application', async () => {
     const root = await createFixture();
     await writeJson(join(root, 'apps/researcher-agent/package.json'), {
       name: '@fixture/researcher-agent',
