@@ -1,0 +1,41 @@
+{
+  "name": "@mastra-agents/researcher-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": "22.13.0",
+    "pnpm": "10.32.1"
+  },
+  "scripts": {
+    "dev": "mastra dev",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "mastra build",
+    "start": "mastra start",
+    "config:check": "tsx scripts/preflight.ts",
+    "preflight": "mastra lint --preflight",
+    "preflight:built": "mastra lint --preflight --skip-build",
+    "test:server": "tsx scripts/smoke-generated-server.ts",
+    "image:build": "docker build --file Dockerfile --tag mastra-agents/researcher-agent:local ../..",
+    "image:smoke": "pnpm image:build && tsx ../../scripts/smoke-agent.mts --app researcher-agent --image mastra-agents/researcher-agent:local",
+    "check": "MODEL_ID=openai/gpt-4o-mini pnpm run check:configured",
+    "check:configured": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm config:check && pnpm test && pnpm build && pnpm preflight:built && pnpm test:server"
+  },
+  "dependencies": {
+    "@mastra/core": "1.74.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "eslint": "10.0.1",
+    "mastra": "1.32.1",
+    "prettier": "3.9.9",
+    "tsx": "4.20.6",
+    "typescript": "6.0.3",
+    "vitest": "5.0.3"
+  }
+}
