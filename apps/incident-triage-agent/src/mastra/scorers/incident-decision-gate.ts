@@ -80,10 +80,10 @@ export const incidentDecisionGate = createScorer({
     'Binary deterministic release gate for schema, grounding, provenance, safety, governance, and non-execution.',
   type: { input: workflowInputSchema, output: gateOutputSchema },
 })
-  .analyze(({ run }) => evaluateDecisionGate(run.input, run.output))
-  .generateScore(({ results }) => (results.analyzeStepResult.length === 0 ? 1 : 0))
+  .analyze(({ run }) => ({ failures: evaluateDecisionGate(run.input, run.output) }))
+  .generateScore(({ results }) => (results.analyzeStepResult.failures.length === 0 ? 1 : 0))
   .generateReason(({ results }) =>
-    results.analyzeStepResult.length === 0
+    results.analyzeStepResult.failures.length === 0
       ? `${incidentDecisionGateRevision}: passed`
-      : `${incidentDecisionGateRevision}: failed:${results.analyzeStepResult.join(',')}`,
+      : `${incidentDecisionGateRevision}: failed:${results.analyzeStepResult.failures.join(',')}`,
   );
