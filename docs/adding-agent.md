@@ -20,7 +20,7 @@ Do not import source from another `apps/*` directory. Keep a dependency local to
 
 ## 2. Preserve the script contract
 
-The package must expose `dev`, `format:check`, `lint`, `typecheck`, `test`, `build`, `start`, `config:check`, `preflight`, `preflight:built`, `test:server`, `image:build`, `image:smoke`, `check`, and `check:configured`.
+The package must expose `dev`, `format:check`, `lint`, `typecheck`, `test`, `build`, `start`, `config:check`, `preflight`, `preflight:built`, `test:server`, `image:build`, `image:smoke`, `check`, and `check:configured`. Stateful apps should add an explicit real-database test tier rather than making the default check depend on Docker.
 
 Update the image tag and the `--app` argument in the image scripts. The directory name, `appId`, smoke argument, and CI matrix app value must agree. The package name and registered `agentId` must also be unique.
 
@@ -43,4 +43,4 @@ Also run `pnpm check` before merging to prove aggregate workspace discovery.
 
 No central app registry should need editing: `scripts/affected-apps.mts` discovers app workspaces from their manifests. Confirm its fixture tests still pass and that the new app appears in the matrix for an app-local change. If the app consumes a shared workspace package, add a fixture proving that source and pnpm lockfile-importer changes select it transitively.
 
-Update `README.md` or `docs/architecture.md` only when the operating contract changes. Record validation evidence in the pull request. Images are built and smoked but are not published or deployed by this repository. Because app authentication is not implemented, do not expose the server publicly without authenticated ingress.
+Update `README.md` or `docs/architecture.md` only when the operating contract changes. Record validation evidence in the pull request. Images are built and smoked but are not published or deployed by this repository. Reference apps do not implement application authentication, so do not expose them publicly without authenticated ingress. A stateful app must additionally define migration ordering, readiness semantics, durable retry ownership, process shutdown behavior, and retention before it is considered deployable. Keep those decisions local until a second app proves a stable shared contract.

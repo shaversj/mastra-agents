@@ -83,9 +83,10 @@ describePostgres('Postgres approval concurrency', () => {
     );
     expect(counts.rows[0]).toEqual({ audits: 1, resumes: 1 });
     const consumed = await approvals.getConsumedByAttempt(accepted.attemptId);
+    if (!consumed) throw new Error('Expected consumed permit');
     expect(consumed?.decision).toBe('approved');
-    expect(await approvals.recordSimulationOutcome(consumed!)).toBe(true);
-    expect(await approvals.recordSimulationOutcome(consumed!)).toBe(false);
+    expect(await approvals.recordSimulationOutcome(consumed)).toBe(true);
+    expect(await approvals.recordSimulationOutcome(consumed)).toBe(false);
     const outcome = await pool.query(
       'SELECT decision, executed FROM incident_simulation_outcomes WHERE permit_id = $1',
       [permit.id],

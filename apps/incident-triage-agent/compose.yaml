@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: incident_triage
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d incident_triage']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - incident-triage-postgres:/var/lib/postgresql/data
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: apps/incident-triage-agent/Dockerfile
+    environment: &app-environment
+      MODEL_ID: ${MODEL_ID:-openai/gpt-4o-mini}
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/incident_triage
+      INCIDENT_HMAC_SECRET: ${INCIDENT_HMAC_SECRET:-development-secret-at-least-32-characters}
+      JWT_ISSUER: ${JWT_ISSUER:-https://identity.example.com/}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-incident-triage-agent}
+      JWT_JWKS_URL: ${JWT_JWKS_URL:-https://identity.example.com/.well-known/jwks.json}
+      PROCESS_ROLE: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ['node', 'role.mjs']
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/incident-triage-agent/Dockerfile
+    environment:
+      <<: *app-environment
+      PROCESS_ROLE: api
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - '4111:4111'
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: apps/incident-triage-agent/Dockerfile
+    environment:
+      <<: *app-environment
+      PROCESS_ROLE: worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  incident-triage-postgres:

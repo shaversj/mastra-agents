@@ -3,11 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 
 import { assertPermitBinding } from '../../approvals/revalidate.js';
-import type {
-  ApprovalDecisionInput,
-  ApprovalPermit,
-  PermitBinding,
-} from '../../domain/approval.js';
+import type { ApprovalDecisionInput, ApprovalPermit } from '../../domain/approval.js';
 
 export class InMemoryApprovalRepository {
   private readonly permits = new Map<string, ApprovalPermit>();

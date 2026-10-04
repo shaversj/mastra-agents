@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 import type { FailureClassification } from '../domain/case.js';
 import type { OutboxLease } from '../persistence/repositories/outbox-repository.js';
 
@@ -54,7 +52,7 @@ export async function dispatchOnce<TInput>(options: {
     }
   }
 
-  const runId = `incident-${lease.attemptId}-${randomUUID()}`;
+  const runId = `incident-${lease.attemptId}`;
   try {
     const input = await options.loadInput(lease.attemptId);
     const run = await options.workflow.createRun({ runId });

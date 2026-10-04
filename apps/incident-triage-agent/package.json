@@ -15,11 +15,18 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:postgres": "vitest run tests/postgres",
+    "test:postgres": "tsx scripts/test-postgres.ts",
     "certify": "tsx scripts/certify.ts",
-    "build": "mastra build",
-    "start": "mastra start",
-    "check": "vitest run && tsc --noEmit"
+    "build": "mastra build && tsx scripts/build-runtime.ts",
+    "start": "node .mastra/output/role.mjs",
+    "config:check": "tsx scripts/preflight.ts",
+    "preflight": "mastra lint --preflight",
+    "preflight:built": "mastra lint --preflight --skip-build",
+    "test:server": "tsx scripts/smoke-generated-server.ts",
+    "image:build": "docker build --file Dockerfile --tag mastra-agents/incident-triage-agent:local ../..",
+    "image:smoke": "pnpm image:build && tsx scripts/smoke-image.ts",
+    "check": "MODEL_ID=openai/gpt-4o-mini DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:1/incident_triage INCIDENT_HMAC_SECRET=development-secret-at-least-32-characters JWT_ISSUER=https://identity.example.com/ JWT_AUDIENCE=incident-triage-agent JWT_JWKS_URL=https://identity.example.com/.well-known/jwks.json pnpm run check:configured",
+    "check:configured": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm config:check && pnpm test && pnpm build && pnpm preflight:built && pnpm test:server"
   },
   "dependencies": {
     "@mastra/core": "1.74.0",
@@ -33,6 +40,7 @@
   "devDependencies": {
     "@types/node": "22.20.5",
     "@types/pg": "8.20.0",
+    "esbuild": "0.28.2",
     "eslint": "10.0.1",
     "mastra": "1.32.1",
     "prettier": "3.9.9",

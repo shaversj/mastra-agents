@@ -80,12 +80,12 @@ describe('durable case behavior', () => {
     const repository = new InMemoryCaseRepository({ maxDispatchAttempts: 2 });
     const accepted = await repository.acceptDelivery(delivery);
     const first = await repository.claimNext('worker', new Date('2026-01-01T00:00:00Z'), 1000);
-    expect(first).not.toBeNull();
+    if (!first) throw new Error('Expected first lease');
 
     await repository.recordDispatchFailure({
-      outboxId: first!.id,
+      outboxId: first.id,
       leaseOwner: 'worker',
-      leaseGeneration: first!.generation,
+      leaseGeneration: first.generation,
       classification: 'retryable',
       reasonCode: 'PROVIDER_TIMEOUT',
       now: new Date('2026-01-01T00:00:00Z'),
@@ -93,10 +93,11 @@ describe('durable case behavior', () => {
     expect(repository.getAttempt(accepted.attemptId)?.state).toBe('retry_wait');
 
     const second = await repository.claimNext('worker', new Date('2026-01-01T00:00:03Z'), 1000);
+    if (!second) throw new Error('Expected second lease');
     await repository.recordDispatchFailure({
-      outboxId: second!.id,
+      outboxId: second.id,
       leaseOwner: 'worker',
-      leaseGeneration: second!.generation,
+      leaseGeneration: second.generation,
       classification: 'retryable',
       reasonCode: 'PROVIDER_TIMEOUT',
       now: new Date('2026-01-01T00:00:03Z'),
@@ -110,12 +111,13 @@ describe('durable case behavior', () => {
     const repository = new InMemoryCaseRepository();
     await repository.acceptDelivery(delivery);
     const lease = await repository.claimNext('worker', new Date(), 1000);
+    if (!lease) throw new Error('Expected lease');
 
     await expect(
       repository.recordDispatchFailure({
-        outboxId: lease!.id,
+        outboxId: lease.id,
         leaseOwner: 'worker',
-        leaseGeneration: lease!.generation,
+        leaseGeneration: lease.generation,
         classification: 'invalid_input',
         reasonCode: 'raw provider body: secret',
         now: new Date(),

@@ -1,4 +1,5 @@
 import { Mastra } from '@mastra/core/mastra';
+import { InMemoryStore } from '@mastra/core/storage';
 import { MastraStorageExporter, Observability, SensitiveDataFilter } from '@mastra/observability';
 import { PostgresStore } from '@mastra/pg';
 
@@ -21,11 +22,14 @@ const config = loadAppConfig();
 const pool = createDatabasePool(config);
 const caseRepository = new PgCaseRepository(pool);
 const approvalRepository = new PgApprovalRepository(pool);
-const storage = new PostgresStore({
-  id: 'incident-mastra-storage',
-  connectionString: config.databaseUrl,
-  schemaName: 'mastra_incident_triage',
-});
+const storage =
+  process.env['INCIDENT_TEST_STORAGE'] === 'in-memory'
+    ? new InMemoryStore({ id: 'incident-mastra-test-storage' })
+    : new PostgresStore({
+        id: 'incident-mastra-storage',
+        connectionString: config.databaseUrl,
+        schemaName: 'mastra_incident_triage',
+      });
 const incidentTriageWorkflow = createIncidentTriageWorkflow({
   createApprovalPermit: async ({ runId, stepId, value }) => {
     const attempt = await caseRepository.getAttempt(value.attemptId);

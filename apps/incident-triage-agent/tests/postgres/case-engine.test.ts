@@ -72,13 +72,14 @@ describePostgres('Postgres case engine', () => {
     const now = new Date();
     const first = await repository.claimNext('worker-a', now, 1000);
     const second = await repository.claimNext('worker-b', new Date(now.getTime() + 2000), 1000);
+    if (!first) throw new Error('Expected first lease');
 
     await expect(
       repository.transitionAttempt({
         attemptId: accepted.attemptId,
         expectedCaseVersion: 1,
         leaseOwner: 'worker-a',
-        leaseGeneration: first!.generation,
+        leaseGeneration: first.generation,
         to: 'collecting_evidence',
         reasonCode: 'DISPATCHED',
       }),

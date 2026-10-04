@@ -16,9 +16,7 @@ export function createOperationalRoutes(pool: Pool): ApiRoute[] {
       handler: async (context) => {
         const ready = await databaseIsReady(pool);
         return context.json(
-          ready
-            ? { status: 'ready' }
-            : { status: 'unavailable', reasonCode: 'POSTGRES_UNAVAILABLE' },
+          ready ? { status: 'ready' } : { status: 'unavailable', reasonCode: 'DATABASE_NOT_READY' },
           ready ? 200 : 503,
         );
       },

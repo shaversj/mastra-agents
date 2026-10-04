@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import type { Pool } from 'pg';
 
@@ -8,17 +10,21 @@ export interface Migration {
   sql: string;
 }
 
+export const migrationIds = [
+  '001_case_engine',
+  '002_evidence_ledger',
+  '003_resume_permits',
+  '004_decision_certification',
+] as const;
+
 async function defaultMigrations(): Promise<Migration[]> {
-  const definitions = [
-    ['001_case_engine', './migrations/001_case_engine.sql'],
-    ['002_evidence_ledger', './migrations/002_evidence_ledger.sql'],
-    ['003_resume_permits', './migrations/003_resume_permits.sql'],
-    ['004_decision_certification', './migrations/004_decision_certification.sql'],
-  ] as const;
+  const baseUrl = process.env.APP_MIGRATIONS_DIR
+    ? pathToFileURL(`${resolve(process.env.APP_MIGRATIONS_DIR)}/`)
+    : new URL('./migrations/', import.meta.url);
   return Promise.all(
-    definitions.map(async ([id, path]) => ({
+    migrationIds.map(async (id) => ({
       id,
-      sql: await readFile(new URL(path, import.meta.url), 'utf8'),
+      sql: await readFile(new URL(`${id}.sql`, baseUrl), 'utf8'),
     })),
   );
 }

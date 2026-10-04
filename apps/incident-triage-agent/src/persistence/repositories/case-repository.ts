@@ -62,15 +62,17 @@ export class InMemoryCaseRepository {
     if (existing) return { ...existing, duplicate: true };
 
     const correlatedId = this.caseByCorrelation.get(correlationKey(input));
-    const caseRecord = correlatedId
-      ? this.cases.get(correlatedId)!
-      : {
-          id: randomUUID(),
-          source: input.source,
-          sourceIncidentId: input.sourceIncidentId,
-          state: 'queued' as const,
-          version: 0,
-        };
+    const correlatedCase = correlatedId ? this.cases.get(correlatedId) : undefined;
+    if (correlatedId && !correlatedCase) throw new Error('CASE_CORRELATION_BROKEN');
+    const caseRecord =
+      correlatedCase ??
+      ({
+        id: randomUUID(),
+        source: input.source,
+        sourceIncidentId: input.sourceIncidentId,
+        state: 'queued' as const,
+        version: 0,
+      } satisfies CaseRecord);
     if (!correlatedId) {
       this.cases.set(caseRecord.id, caseRecord);
       this.caseByCorrelation.set(correlationKey(input), caseRecord.id);
@@ -82,6 +84,7 @@ export class InMemoryCaseRepository {
       deliveryId: input.deliveryId,
       state: 'queued',
     };
+    const fromState = correlatedCase?.state ?? null;
     caseRecord.version += 1;
     caseRecord.state = 'queued';
     this.attempts.set(attempt.id, attempt);
@@ -89,7 +92,7 @@ export class InMemoryCaseRepository {
       id: randomUUID(),
       caseId: caseRecord.id,
       attemptId: attempt.id,
-      fromState: correlatedId ? caseRecord.state : null,
+      fromState,
       toState: 'queued',
       caseVersion: caseRecord.version,
       reasonCode: 'DELIVERY_ACCEPTED',
@@ -139,7 +142,8 @@ export class InMemoryCaseRepository {
     ) {
       throw new Error('STALE_LEASE');
     }
-    const caseRecord = this.cases.get(attempt.caseId)!;
+    const caseRecord = this.cases.get(attempt.caseId);
+    if (!caseRecord) throw new Error('CASE_NOT_FOUND');
     if (caseRecord.version !== input.expectedCaseVersion) throw new Error('STALE_CASE_VERSION');
 
     const fromState = attempt.state;
@@ -168,8 +172,10 @@ export class InMemoryCaseRepository {
     ) {
       throw new Error('STALE_LEASE');
     }
-    const attempt = this.attempts.get(outbox.attemptId)!;
-    const caseRecord = this.cases.get(attempt.caseId)!;
+    const attempt = this.attempts.get(outbox.attemptId);
+    if (!attempt) throw new Error('ATTEMPT_NOT_FOUND');
+    const caseRecord = this.cases.get(attempt.caseId);
+    if (!caseRecord) throw new Error('CASE_NOT_FOUND');
     const fromState = attempt.state;
     const exhausted = outbox.dispatchAttempts >= this.maxDispatchAttempts;
     const retry = input.classification === 'retryable' && !exhausted;
@@ -264,17 +270,30 @@ export class PgCaseRepository {
         return { caseId: row.case_id, attemptId: row.attempt_id, duplicate: true };
       }
 
-      const caseId = randomUUID();
       const attemptId = randomUUID();
-      const selectedCase = await client.query<{ id: string; state: CaseState; version: number }>(
-        `INSERT INTO incident_cases (id, source, source_incident_id, state, version)
-         VALUES ($1, $2, $3, 'queued', 1)
-         ON CONFLICT (source, source_incident_id) DO UPDATE
-           SET version = incident_cases.version + 1, state = 'queued', updated_at = now()
-         RETURNING id, state, version`,
-        [caseId, input.source, input.sourceIncidentId],
+      const existingCase = await client.query<{ id: string; state: CaseState; version: number }>(
+        `SELECT id, state, version FROM incident_cases
+         WHERE source = $1 AND source_incident_id = $2
+         FOR UPDATE`,
+        [input.source, input.sourceIncidentId],
       );
-      const caseRow = selectedCase.rows[0]!;
+      const priorCase = existingCase.rows[0];
+      const selectedCase = priorCase
+        ? await client.query<{ id: string; state: CaseState; version: number }>(
+            `UPDATE incident_cases
+             SET version = version + 1, state = 'queued', updated_at = now()
+             WHERE id = $1
+             RETURNING id, state, version`,
+            [priorCase.id],
+          )
+        : await client.query<{ id: string; state: CaseState; version: number }>(
+            `INSERT INTO incident_cases (id, source, source_incident_id, state, version)
+             VALUES ($1, $2, $3, 'queued', 1)
+             RETURNING id, state, version`,
+            [randomUUID(), input.source, input.sourceIncidentId],
+          );
+      const caseRow = selectedCase.rows[0];
+      if (!caseRow) throw new Error('CASE_UPSERT_FAILED');
       await client.query(
         `INSERT INTO incident_attempts
           (id, case_id, delivery_source, delivery_id, state)
@@ -289,7 +308,7 @@ export class PgCaseRepository {
       await this.insertTransition(client, {
         caseId: caseRow.id,
         attemptId,
-        fromState: caseRow.version === 1 ? null : caseRow.state,
+        fromState: priorCase?.state ?? null,
         toState: 'queued',
         caseVersion: caseRow.version,
         reasonCode: 'DELIVERY_ACCEPTED',

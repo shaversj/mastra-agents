@@ -44,7 +44,7 @@ export function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-function validatePayload(payload: Record<string, unknown>): void {
+export function validateEvidencePayload(payload: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(payload)) {
     if (forbiddenKey.test(key)) throw new Error('FORBIDDEN_EVIDENCE_FIELD');
     if (!allowedPayloadFields.has(key)) throw new Error('UNKNOWN_EVIDENCE_FIELD');
@@ -61,7 +61,7 @@ export function createEvidenceIdentity(input: EvidenceInput): string {
   if (input.canonicalizationVersion !== 'canonical-json/v1') {
     throw new Error('UNKNOWN_CANONICALIZATION_VERSION');
   }
-  validatePayload(input.normalizedPayload);
+  validateEvidencePayload(input.normalizedPayload);
   const observedAt = new Date(input.observedAt);
   if (!Number.isFinite(observedAt.getTime()) || observedAt.toISOString() !== input.observedAt) {
     throw new Error('INVALID_OBSERVATION_TIME');

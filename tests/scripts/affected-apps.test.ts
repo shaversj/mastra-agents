@@ -86,6 +86,33 @@ afterEach(async () => {
 });
 
 describe('affected application selection', () => {
+  it('keeps incident app source and importer changes isolated', async () => {
+    const packages: FixturePackage[] = [
+      { directory: 'apps/researcher-agent', name: '@mastra-agents/researcher-agent' },
+      { directory: 'apps/writer-agent', name: '@mastra-agents/writer-agent' },
+      {
+        directory: 'apps/incident-triage-agent',
+        name: '@mastra-agents/incident-triage-agent',
+      },
+    ];
+    const before = await createFixture({ packages });
+    const after = await createFixture({
+      packages,
+      lockfileOverrides: {
+        'apps/incident-triage-agent': {
+          dependencies: { pg: { specifier: '8.23.1', version: '8.23.1' } },
+        },
+      },
+    });
+
+    expect(selectedApps(after, ['apps/incident-triage-agent/src/worker/main.ts'], before)).toEqual([
+      'incident-triage-agent',
+    ]);
+    expect(
+      selectedApps(after, ['apps/incident-triage-agent/package.json', 'pnpm-lock.yaml'], before),
+    ).toEqual(['incident-triage-agent']);
+  });
+
   it('selects only the owner of an app source change', async () => {
     const snapshot = await createFixture();
 

@@ -134,10 +134,10 @@ export async function runCapsuleExperiment(input: {
       metadata: { datasetVersion: input.datasetVersion },
     });
   }
-  const missingCapsules = [];
-  for (const capsule of input.capsules) {
-    if (!(await dataset.getItem({ itemId: capsule.id }))) missingCapsules.push(capsule);
-  }
+  const existingItems = await Promise.all(
+    input.capsules.map((capsule) => dataset.getItem({ itemId: capsule.id })),
+  );
+  const missingCapsules = input.capsules.filter((_, index) => !existingItems[index]);
   if (missingCapsules.length > 0) {
     await dataset.addItems({
       items: missingCapsules.map((capsule) => ({
