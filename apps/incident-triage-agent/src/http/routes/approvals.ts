@@ -1,8 +1,8 @@
 import { registerApiRoute, type ApiRoute } from '@mastra/core/server';
 import { z } from 'zod';
 
+import { currentBindingVersions } from '../../approvals/binding.js';
 import type { AppConfig } from '../../config/app.js';
-import type { PermitBinding } from '../../domain/approval.js';
 import type { PgApprovalRepository } from '../../persistence/repositories/approval-repository.js';
 import type { AuthenticatedPrincipal } from '../../security/roles.js';
 import { authorizeRoles } from '../middleware/authorize.js';
@@ -22,23 +22,11 @@ export function createApprovalRoute(config: AppConfig, repository: PgApprovalRep
       const principal = context.get('requestContext').get('user') as AuthenticatedPrincipal;
       const permit = await repository.get(context.req.param('permitId'));
       if (!permit) return context.json({ reasonCode: 'PERMIT_NOT_FOUND' }, 404);
-      const expectedBinding: PermitBinding = {
-        caseId: permit.caseId,
-        attemptId: permit.attemptId,
-        mastraRunId: permit.mastraRunId,
-        suspendedStep: permit.suspendedStep,
-        manifestDigest: permit.manifestDigest,
-        decisionDigest: permit.decisionDigest,
-        stagedParametersDigest: permit.stagedParametersDigest,
-        verificationPlanDigest: permit.verificationPlanDigest,
-        buildVersion: process.env.APP_BUILD_VERSION?.trim() || 'development',
-        promptVersion: 'incident-triage-prompt/v1',
-        schemaVersion: 'incident-decision/v1',
-        policyVersion: 'mitigation-policy/v1',
-        catalogVersion: 'mitigation-catalog/v1',
-        collectorVersion: 'collector/v1',
-        redactionVersion: 'redaction/v1',
-      };
+      const expectedBinding = await repository.getCurrentBinding(
+        permit.id,
+        currentBindingVersions(),
+      );
+      if (!expectedBinding) return context.json({ reasonCode: 'PERMIT_STALE' }, 409);
       try {
         await repository.consume({
           permitId: permit.id,
@@ -57,9 +45,10 @@ export function createApprovalRoute(config: AppConfig, repository: PgApprovalRep
           'PERMIT_FORBIDDEN',
           'PERMIT_STALE',
         ]);
+        const safeReason = allowed.has(reasonCode) ? reasonCode : 'PERMIT_CONFLICT';
         return context.json(
-          { reasonCode: allowed.has(reasonCode) ? reasonCode : 'PERMIT_CONFLICT' },
-          409,
+          { reasonCode: safeReason },
+          safeReason === 'PERMIT_FORBIDDEN' ? 403 : 409,
         );
       }
     },

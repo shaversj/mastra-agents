@@ -3,6 +3,7 @@ import { InMemoryStore } from '@mastra/core/storage';
 import { MastraStorageExporter, Observability, SensitiveDataFilter } from '@mastra/observability';
 import { PostgresStore } from '@mastra/pg';
 
+import { currentBindingVersions } from '../approvals/binding.js';
 import { appMetadata, loadAppConfig } from '../config/app.js';
 import { createPermit } from '../approvals/permit.js';
 import { canonicalize, sha256 } from '../evidence/canonicalize.js';
@@ -15,6 +16,7 @@ import { PgApprovalRepository } from '../persistence/repositories/approval-repos
 import { PgCaseRepository } from '../persistence/repositories/case-repository.js';
 import { createJwtAuthProvider } from '../security/auth.js';
 import { createIncidentTriageAgent } from './agents/incident-triage.js';
+import { createFixtureIncidentModel } from './models/fixture.js';
 import { incidentDecisionGate, incidentDecisionGateId } from './scorers/incident-decision-gate.js';
 import { createIncidentTriageWorkflow } from './workflows/incident-triage.js';
 
@@ -22,6 +24,8 @@ const config = loadAppConfig();
 const pool = createDatabasePool(config);
 const caseRepository = new PgCaseRepository(pool);
 const approvalRepository = new PgApprovalRepository(pool);
+const incidentModel =
+  config.modelId === 'fixture/incident-triage' ? createFixtureIncidentModel() : config.modelId;
 const storage =
   process.env['INCIDENT_TEST_STORAGE'] === 'in-memory'
     ? new InMemoryStore({ id: 'incident-mastra-test-storage' })
@@ -34,9 +38,11 @@ const incidentTriageWorkflow = createIncidentTriageWorkflow({
   createApprovalPermit: async ({ runId, stepId, value }) => {
     const attempt = await caseRepository.getAttempt(value.attemptId);
     if (!attempt || attempt.mastraRunId !== runId) throw new Error('WORKFLOW_RUN_BINDING_MISMATCH');
+    const versions = currentBindingVersions();
     const permit = createPermit({
       binding: {
         caseId: attempt.caseId,
+        caseVersion: attempt.caseVersion,
         attemptId: attempt.id,
         mastraRunId: runId,
         suspendedStep: stepId,
@@ -46,25 +52,24 @@ const incidentTriageWorkflow = createIncidentTriageWorkflow({
           canonicalize({ action: value.policy.catalogAction, executed: false }),
         ),
         verificationPlanDigest: sha256(canonicalize(value.decision.verificationPlan)),
-        buildVersion: process.env.APP_BUILD_VERSION?.trim() || 'development',
-        promptVersion: 'incident-triage-prompt/v1',
-        schemaVersion: 'incident-decision/v1',
-        policyVersion: 'mitigation-policy/v1',
-        catalogVersion: 'mitigation-catalog/v1',
-        collectorVersion: 'collector/v1',
-        redactionVersion: 'redaction/v1',
+        ...versions,
       },
       eligibleRoles: [config.approverRole],
       expiresAt: new Date(Date.now() + config.approvalTtlSeconds * 1000),
     });
-    await approvalRepository.insert(permit);
-    return permit.id;
+    return (await approvalRepository.insert(permit)).id;
+  },
+  revalidateResume: async (resumeData) => {
+    await approvalRepository.assertResumeAuthorized({
+      ...resumeData,
+      versions: currentBindingVersions(),
+    });
   },
 });
 
 export const mastra = new Mastra({
   agents: {
-    [appMetadata.agentId]: createIncidentTriageAgent(config),
+    [appMetadata.agentId]: createIncidentTriageAgent(config, incidentModel),
   },
   workflows: {
     [appMetadata.workflowId]: incidentTriageWorkflow,

@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS incident_approval_permits (
   id uuid PRIMARY KEY,
   case_id uuid NOT NULL REFERENCES incident_cases(id),
+  case_version integer NOT NULL CHECK (case_version >= 1),
   attempt_id uuid NOT NULL REFERENCES incident_attempts(id),
   mastra_run_id text NOT NULL,
   suspended_step text NOT NULL,
@@ -20,11 +21,23 @@ CREATE TABLE IF NOT EXISTS incident_approval_permits (
   status text NOT NULL CHECK (status IN ('pending', 'consumed', 'expired', 'superseded')),
   created_at timestamptz NOT NULL,
   consumed_at timestamptz,
+  consumed_case_version integer CHECK (consumed_case_version >= 1),
   actor_id text,
   actor_role text,
   decision text CHECK (decision IN ('approved', 'rejected')),
   reason text,
   UNIQUE (mastra_run_id, suspended_step, decision_digest)
+);
+
+CREATE TABLE IF NOT EXISTS incident_workflow_artifacts (
+  attempt_id uuid PRIMARY KEY REFERENCES incident_attempts(id),
+  case_id uuid NOT NULL REFERENCES incident_cases(id),
+  mastra_run_id text NOT NULL,
+  suspended_step text NOT NULL,
+  decision_digest text NOT NULL,
+  staged_parameters_digest text NOT NULL,
+  verification_plan_digest text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS incident_approval_audit (

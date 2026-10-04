@@ -78,4 +78,19 @@ describe('JWT authentication', () => {
       ),
     ).resolves.toBeNull();
   });
+
+  it('keeps workflow resume internal to the governed worker', () => {
+    const provider = createJwtAuthProvider(loadAppConfig(environment), keyResolver);
+    const principal = { subject: 'approver', roles: ['incident-approver'] };
+
+    expect(
+      provider.authorizeUser(
+        principal,
+        new Request('http://local/api/workflows/incident-triage-workflow/resume-async', {
+          method: 'POST',
+        }),
+      ),
+    ).toBe(false);
+    expect(provider.authorizeUser(principal, new Request('http://local/cases/case-1'))).toBe(true);
+  });
 });

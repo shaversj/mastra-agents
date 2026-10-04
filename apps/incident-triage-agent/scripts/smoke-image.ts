@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { createEvidenceIdentity } from '../src/evidence/canonicalize.js';
+import { createIncidentSignature } from '../src/http/middleware/hmac.js';
+
 const exec = promisify(execFile);
 const suffix = randomUUID().slice(0, 8);
 const network = `incident-triage-smoke-${suffix}`;
@@ -11,13 +14,20 @@ const api = `${network}-api`;
 const worker = `${network}-worker`;
 const image = process.env.IMAGE_NAME ?? 'mastra-agents/incident-triage-agent:local';
 const databaseUrl = 'postgresql://postgres:postgres@postgres:5432/incident_triage';
+const hmacSecret = 'smoke-secret-with-at-least-32-characters';
+const deliveryId = `smoke-${suffix}`;
+const redactedPayload = { summary: 'dependency unavailable', service: 'checkout-api' };
 const appEnvironment = [
   '-e',
-  'MODEL_ID=openai/gpt-4o-mini',
+  'MODEL_ID=fixture/incident-triage',
+  '-e',
+  'INCIDENT_FIXTURE_MODEL_ENABLED=true',
+  '-e',
+  'INCIDENT_FIXTURE_EVIDENCE_ID=process-does-not-run-the-model',
   '-e',
   `DATABASE_URL=${databaseUrl}`,
   '-e',
-  'INCIDENT_HMAC_SECRET=smoke-secret-with-at-least-32-characters',
+  `INCIDENT_HMAC_SECRET=${hmacSecret}`,
   '-e',
   'JWT_ISSUER=https://identity.example.com/',
   '-e',
@@ -65,6 +75,26 @@ async function boundedLogs(container: string): Promise<string> {
   } catch {
     return '';
   }
+}
+
+async function waitForCaseState(caseId: string, expected: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const state = await docker(
+      'exec',
+      postgres,
+      'psql',
+      '-U',
+      'postgres',
+      '-d',
+      'incident_triage',
+      '-Atc',
+      `SELECT state FROM incident_cases WHERE id = '${caseId}'`,
+    );
+    if (state === expected) return;
+    await delay(250);
+  }
+  throw new Error(`Case ${caseId} did not reach ${expected}`);
 }
 
 try {
@@ -127,6 +157,51 @@ try {
   }
   await docker('exec', api, 'sh', '-c', 'test ! -e /app/src && test ! -e /app/.env');
 
+  const body = JSON.stringify({
+    source: 'image-smoke',
+    deliveryId,
+    sourceIncidentId: `incident-${suffix}`,
+    redactedPayload,
+  });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const intake = await fetch(`${baseUrl}/incidents`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-incident-timestamp': timestamp,
+      'x-incident-signature': createIncidentSignature(hmacSecret, timestamp, body),
+    },
+    body,
+  });
+  if (intake.status !== 202) {
+    throw new Error(`Signed intake returned ${String(intake.status)}: ${await intake.text()}`);
+  }
+  const accepted = (await intake.json()) as { caseId: string; attemptId: string };
+  const observedAt = await docker(
+    'exec',
+    postgres,
+    'psql',
+    '-U',
+    'postgres',
+    '-d',
+    'incident_triage',
+    '-Atc',
+    `SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+     FROM incident_deliveries WHERE source = 'image-smoke' AND delivery_id = '${deliveryId}'`,
+  );
+  const evidenceId = createEvidenceIdentity({
+    source: 'image-smoke',
+    sourceTier: 'primary',
+    sourceLocator: `delivery/image-smoke/${deliveryId}`,
+    observedAt,
+    collectorVersion: 'collector/v1',
+    redactionVersion: 'redaction/v1',
+    canonicalizationVersion: 'canonical-json/v1',
+    freshness: 'fresh',
+    collectionStatus: 'complete',
+    normalizedPayload: redactedPayload,
+  });
+
   await docker(
     'run',
     '-d',
@@ -136,10 +211,12 @@ try {
     network,
     ...appEnvironment,
     '-e',
+    `INCIDENT_FIXTURE_EVIDENCE_ID=${evidenceId}`,
+    '-e',
     'PROCESS_ROLE=worker',
     image,
   );
-  await delay(1000);
+  await waitForCaseState(accepted.caseId, 'completed');
   if ((await docker('inspect', '--format', '{{.State.Running}}', worker)) !== 'true') {
     throw new Error('Worker role did not remain running');
   }
@@ -147,7 +224,9 @@ try {
   const workerExit = await docker('inspect', '--format', '{{.State.ExitCode}}', worker);
   if (workerExit !== '0') throw new Error(`Worker exited with ${workerExit}`);
 
-  console.log('Image smoke passed API, migration, worker, non-root, auth, and shutdown probes.');
+  console.log(
+    'Image smoke passed signed intake, case processing, API, migration, worker, non-root, auth, and shutdown probes.',
+  );
 } catch (error) {
   const logs = await Promise.all([boundedLogs(api), boundedLogs(worker), boundedLogs(postgres)]);
   throw new Error(

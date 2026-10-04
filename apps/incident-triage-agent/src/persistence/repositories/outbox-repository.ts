@@ -16,4 +16,5 @@ export interface OutboxRecord {
 export interface OutboxLease extends OutboxRecord {
   owner: string;
   generation: number;
+  caseVersion: number;
 }

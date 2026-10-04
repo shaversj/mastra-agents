@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS incident_attempts (
   delivery_source text NOT NULL,
   delivery_id text NOT NULL,
   state text NOT NULL,
+  case_version integer NOT NULL CHECK (case_version >= 1),
   mastra_run_id text UNIQUE,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),

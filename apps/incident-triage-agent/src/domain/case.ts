@@ -28,6 +28,7 @@ export interface AttemptRecord {
   caseId: string;
   deliveryId: string;
   state: CaseState;
+  caseVersion: number;
   mastraRunId?: string;
 }
 

@@ -164,4 +164,65 @@ describe('incident triage Mastra workflow', () => {
     if (result.status === 'failed')
       expect(result.error.message).toContain('UNKNOWN_EVIDENCE_CITATION');
   });
+
+  it('rejects a direct resume that is not authorized by the consumed permit', async () => {
+    const workflow = createIncidentTriageWorkflow({
+      createApprovalPermit: async () => '00000000-0000-4000-8000-000000000001',
+      revalidateResume: async () => {
+        throw new Error('RESUME_NOT_AUTHORIZED');
+      },
+    });
+    const mastra = new Mastra({
+      agents: {
+        [appMetadata.agentId]: createIncidentTriageAgent(
+          config,
+          createMockModel({
+            objectGenerationMode: 'json',
+            mockText: decision('bad_deploy', 'rollback_release'),
+            version: 'v2',
+          }) as IncidentAgentModel,
+        ),
+      },
+      workflows: { [appMetadata.workflowId]: workflow },
+    });
+    const run = await mastra.getWorkflow(appMetadata.workflowId).createRun();
+    await run.start({
+      inputData: {
+        attemptId: 'attempt-1',
+        incident: { service: 'api' },
+        certificationMode: false,
+        manifest: {
+          id: 'manifest',
+          attemptId: 'attempt-1',
+          digest: 'digest',
+          sealedAt: '2026-10-03T18:00:00.000Z',
+          items: [
+            {
+              evidenceId: 'ev-1',
+              source: 'metrics',
+              sourceTier: 'primary',
+              sourceLocator: 'metrics/api',
+              freshness: 'fresh',
+              collectionStatus: 'complete',
+            },
+          ],
+        },
+      },
+    });
+
+    const resumed = await run.resume({
+      step: 'governed-approval',
+      resumeData: {
+        permitId: '00000000-0000-4000-8000-000000000001',
+        decision: 'approved',
+        reason: 'Bypass attempt',
+        actorId: 'caller',
+        actorRole: 'incident-approver',
+      },
+    });
+
+    expect(resumed.status).toBe('failed');
+    if (resumed.status === 'failed')
+      expect(resumed.error.message).toContain('RESUME_NOT_AUTHORIZED');
+  });
 });

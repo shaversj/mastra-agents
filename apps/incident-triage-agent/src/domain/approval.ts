@@ -1,5 +1,6 @@
 export interface PermitBinding {
   caseId: string;
+  caseVersion: number;
   attemptId: string;
   mastraRunId: string;
   suspendedStep: string;
@@ -23,6 +24,7 @@ export interface ApprovalPermit extends PermitBinding {
   status: 'pending' | 'consumed' | 'expired' | 'superseded';
   createdAt: Date;
   consumedAt?: Date;
+  consumedCaseVersion?: number;
   actorId?: string;
   actorRole?: string;
   decision?: 'approved' | 'rejected';

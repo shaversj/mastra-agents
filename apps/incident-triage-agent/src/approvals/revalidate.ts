@@ -7,6 +7,7 @@ export function bindingDigest(binding: PermitBinding): string {
       attemptId: binding.attemptId,
       buildVersion: binding.buildVersion,
       caseId: binding.caseId,
+      caseVersion: binding.caseVersion,
       catalogVersion: binding.catalogVersion,
       collectorVersion: binding.collectorVersion,
       decisionDigest: binding.decisionDigest,

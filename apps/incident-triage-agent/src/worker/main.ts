@@ -1,4 +1,5 @@
 import { loadAppConfig } from '../config/app.js';
+import { currentBindingVersions } from '../approvals/binding.js';
 import { mastra } from '../mastra/index.js';
 import { createDatabasePool } from '../persistence/db.js';
 import { PgApprovalRepository } from '../persistence/repositories/approval-repository.js';
@@ -38,19 +39,73 @@ export async function runWorker(): Promise<void> {
           ) {
             throw new Error('CONSUMED_PERMIT_NOT_FOUND');
           }
-          const run = await workflow.createRun({ runId: permit.mastraRunId });
-          const result = await run.resume({
-            step: permit.suspendedStep,
-            resumeData: {
-              permitId: permit.id,
-              decision: permit.decision,
-              reason: permit.reason,
-              actorId: permit.actorId,
-              actorRole: permit.actorRole,
-            },
+          await approvals.assertResumeAuthorized({
+            permitId: permit.id,
+            actorId: permit.actorId,
+            actorRole: permit.actorRole,
+            decision: permit.decision,
+            reason: permit.reason,
+            versions: currentBindingVersions(),
           });
-          if (result.status !== 'success') throw new Error('WORKFLOW_RESUME_INCOMPLETE');
-          await approvals.recordSimulationOutcome(permit);
+          const existing = await workflow.getWorkflowRunById(permit.mastraRunId);
+          if (existing?.status === 'failed') {
+            return {
+              state: 'recoverable_failure' as const,
+              reasonCode: 'WORKFLOW_RESUME_FAILED',
+              outboxStatus: 'failed' as const,
+            };
+          }
+          if (existing && existing.status !== 'success' && existing.status !== 'suspended') {
+            throw new Error('WORKFLOW_RESUME_NOT_READY');
+          }
+          const result =
+            existing?.status === 'success'
+              ? existing
+              : await (
+                  await workflow.createRun({ runId: permit.mastraRunId })
+                ).resume({
+                  step: permit.suspendedStep,
+                  resumeData: {
+                    permitId: permit.id,
+                    decision: permit.decision,
+                    reason: permit.reason,
+                    actorId: permit.actorId,
+                    actorRole: permit.actorRole,
+                  },
+                });
+          if (result.status !== 'success') {
+            return {
+              state: 'recoverable_failure' as const,
+              reasonCode: 'WORKFLOW_RESUME_FAILED',
+              outboxStatus: 'failed' as const,
+            };
+          }
+          if (permit.decision === 'approved') {
+            await approvals.recordSimulationOutcome(permit);
+            return {
+              state: 'simulation_recorded' as const,
+              reasonCode: 'SIMULATION_RECORDED',
+            };
+          }
+          return { state: 'completed' as const, reasonCode: 'APPROVAL_REJECTED' };
+        },
+        classifyStartResult: (result) => {
+          if (result.status === 'suspended') {
+            return { state: 'approval_pending', reasonCode: 'APPROVAL_REQUIRED' };
+          }
+          if (result.status === 'failed') {
+            return {
+              state: 'recoverable_failure',
+              reasonCode: 'WORKFLOW_FAILED',
+              outboxStatus: 'failed',
+            };
+          }
+          if (result.status !== 'success') throw new Error('WORKFLOW_NOT_TERMINAL');
+          const disposition = (result.result as { policy?: { disposition?: string } } | undefined)
+            ?.policy?.disposition;
+          return disposition === 'human_input_needed'
+            ? { state: 'human_input_needed', reasonCode: 'HUMAN_INPUT_NEEDED' }
+            : { state: 'completed', reasonCode: 'WORKFLOW_COMPLETED' };
         },
         loadInput: (attemptId) => loadWorkflowInput(pool, attemptId),
       });

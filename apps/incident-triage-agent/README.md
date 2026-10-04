@@ -39,7 +39,7 @@ pnpm image:smoke
 LIVE_MODEL_EXPERIMENTS=true pnpm certify
 ```
 
-The default check is model-free. Postgres tests and image smoke are explicit integration tiers. Live certification is opt-in and uses Mastra datasets, experiments, and the deterministic composite scorer; a perfect score is necessary but a named human reviewer still makes the release decision.
+The default check is model-free. Postgres tests and image smoke are explicit integration tiers. Image smoke enables the guarded fixture model only inside its isolated Docker network and proves a signed delivery reaches a completed case without provider credentials or outbound model traffic. Live certification is opt-in and uses Mastra datasets, experiments, and the deterministic composite scorer; a perfect score is necessary but a named human reviewer still makes the release decision.
 
 ## Recovery and retention
 
@@ -49,4 +49,4 @@ Evidence and traces use the configured short retention windows. Governance recor
 
 ## Safety boundary
 
-Mitigation suggestions must come from the versioned catalog and policy. Approval is bound to the case, attempt, Mastra run, suspended step, evidence digest, and governance versions. Certification mode bypasses permit creation but remains action-disabled. Production actuation, broad arbitrary tools, and silent fallback to a live model are prohibited.
+Mitigation suggestions must come from the versioned catalog and policy. Approval is bound to the case version, attempt, Mastra run, suspended step, evidence digest, decision artifacts, and governance versions. HTTP workflow-resume endpoints are denied; only the worker may resume a consumed permit after revalidation. Certification mode bypasses permit creation but remains action-disabled. Production actuation, broad arbitrary tools, and silent fallback to a live model are prohibited.

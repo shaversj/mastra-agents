@@ -17,9 +17,17 @@ export function createCaseRoutes(config: AppConfig, pool: Pool): ApiRoute[] {
           source_incident_id: string;
           state: string;
           version: number;
+          permit_id: string | null;
         }>(
-          `SELECT id, source, source_incident_id, state, version
-           FROM incident_cases WHERE id = $1`,
+          `SELECT c.id, c.source, c.source_incident_id, c.state, c.version,
+                  p.id AS permit_id
+           FROM incident_cases c
+           LEFT JOIN LATERAL (
+             SELECT id FROM incident_approval_permits
+             WHERE case_id = c.id AND status = 'pending'
+             ORDER BY created_at DESC LIMIT 1
+           ) p ON true
+           WHERE c.id = $1`,
           [context.req.param('caseId')],
         );
         const row = result.rows[0];
@@ -30,6 +38,7 @@ export function createCaseRoutes(config: AppConfig, pool: Pool): ApiRoute[] {
           sourceIncidentId: row.source_incident_id,
           state: row.state,
           version: row.version,
+          ...(row.permit_id ? { pendingApproval: { permitId: row.permit_id } } : {}),
         });
       },
     }),

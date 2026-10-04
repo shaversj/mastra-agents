@@ -26,9 +26,20 @@ interface DispatchFailureInput {
   outboxId: string;
   leaseOwner: string;
   leaseGeneration: number;
+  expectedCaseVersion: number;
   classification: FailureClassification;
   reasonCode: string;
   now: Date;
+}
+
+export interface WorkflowProjectionInput {
+  outboxId: string;
+  leaseOwner: string;
+  leaseGeneration: number;
+  expectedCaseVersion: number;
+  to: CaseState;
+  reasonCode: string;
+  outboxStatus?: 'completed' | 'failed';
 }
 
 interface RepositoryOptions {
@@ -83,6 +94,7 @@ export class InMemoryCaseRepository {
       caseId: caseRecord.id,
       deliveryId: input.deliveryId,
       state: 'queued',
+      caseVersion: caseRecord.version + 1,
     };
     const fromState = correlatedCase?.state ?? null;
     caseRecord.version += 1;
@@ -128,7 +140,15 @@ export class InMemoryCaseRepository {
     candidate.leaseGeneration += 1;
     candidate.leaseExpiresAt = new Date(now.getTime() + leaseMs);
     candidate.dispatchAttempts += 1;
-    return { ...candidate, owner, generation: candidate.leaseGeneration };
+    const attempt = this.attempts.get(candidate.attemptId);
+    const caseRecord = attempt ? this.cases.get(attempt.caseId) : undefined;
+    if (!caseRecord) throw new Error('CASE_NOT_FOUND');
+    return {
+      ...candidate,
+      owner,
+      generation: candidate.leaseGeneration,
+      caseVersion: caseRecord.version,
+    };
   }
 
   async transitionAttempt(input: TransitionInput): Promise<void> {
@@ -150,6 +170,7 @@ export class InMemoryCaseRepository {
     caseRecord.version += 1;
     caseRecord.state = input.to;
     attempt.state = input.to;
+    attempt.caseVersion = caseRecord.version;
     this.transitions.push({
       id: randomUUID(),
       caseId: caseRecord.id,
@@ -176,6 +197,13 @@ export class InMemoryCaseRepository {
     if (!attempt) throw new Error('ATTEMPT_NOT_FOUND');
     const caseRecord = this.cases.get(attempt.caseId);
     if (!caseRecord) throw new Error('CASE_NOT_FOUND');
+    if (caseRecord.version !== input.expectedCaseVersion) {
+      outbox.status = 'failed';
+      outbox.reasonCode = 'STALE_CASE_VERSION';
+      delete outbox.leaseOwner;
+      delete outbox.leaseExpiresAt;
+      return;
+    }
     const fromState = attempt.state;
     const exhausted = outbox.dispatchAttempts >= this.maxDispatchAttempts;
     const retry = input.classification === 'retryable' && !exhausted;
@@ -184,6 +212,7 @@ export class InMemoryCaseRepository {
     caseRecord.version += 1;
     caseRecord.state = nextState;
     attempt.state = nextState;
+    attempt.caseVersion = caseRecord.version;
     this.transitions.push({
       id: randomUUID(),
       caseId: caseRecord.id,
@@ -221,6 +250,42 @@ export class InMemoryCaseRepository {
       throw new Error('STALE_LEASE');
     }
     outbox.status = 'completed';
+    delete outbox.leaseOwner;
+    delete outbox.leaseExpiresAt;
+  }
+
+  async projectWorkflowOutcome(input: WorkflowProjectionInput): Promise<void> {
+    assertReasonCode(input.reasonCode);
+    const outbox = [...this.outbox.values()].find((row) => row.id === input.outboxId);
+    if (!outbox) throw new Error('OUTBOX_NOT_FOUND');
+    if (
+      outbox.leaseOwner !== input.leaseOwner ||
+      outbox.leaseGeneration !== input.leaseGeneration
+    ) {
+      throw new Error('STALE_LEASE');
+    }
+    const attempt = this.attempts.get(outbox.attemptId);
+    if (!attempt) throw new Error('ATTEMPT_NOT_FOUND');
+    const caseRecord = this.cases.get(attempt.caseId);
+    if (!caseRecord) throw new Error('CASE_NOT_FOUND');
+    if (caseRecord.version !== input.expectedCaseVersion) throw new Error('STALE_CASE_VERSION');
+    const fromState = attempt.state;
+    caseRecord.version += 1;
+    caseRecord.state = input.to;
+    attempt.state = input.to;
+    attempt.caseVersion = caseRecord.version;
+    this.transitions.push({
+      id: randomUUID(),
+      caseId: caseRecord.id,
+      attemptId: attempt.id,
+      fromState,
+      toState: input.to,
+      caseVersion: caseRecord.version,
+      reasonCode: input.reasonCode,
+      createdAt: new Date(),
+    });
+    outbox.status = input.outboxStatus ?? 'completed';
+    outbox.reasonCode = input.reasonCode;
     delete outbox.leaseOwner;
     delete outbox.leaseExpiresAt;
   }
@@ -294,11 +359,18 @@ export class PgCaseRepository {
           );
       const caseRow = selectedCase.rows[0];
       if (!caseRow) throw new Error('CASE_UPSERT_FAILED');
+      if (priorCase) {
+        await client.query(
+          `UPDATE incident_approval_permits SET status = 'superseded'
+           WHERE case_id = $1 AND status = 'pending'`,
+          [caseRow.id],
+        );
+      }
       await client.query(
         `INSERT INTO incident_attempts
-          (id, case_id, delivery_source, delivery_id, state)
-         VALUES ($1, $2, $3, $4, 'queued')`,
-        [attemptId, caseRow.id, input.source, input.deliveryId],
+          (id, case_id, delivery_source, delivery_id, state, case_version)
+         VALUES ($1, $2, $3, $4, 'queued', $5)`,
+        [attemptId, caseRow.id, input.source, input.deliveryId, caseRow.version],
       );
       await client.query(
         `UPDATE incident_deliveries SET case_id = $3, attempt_id = $4
@@ -338,13 +410,15 @@ export class PgCaseRepository {
       next_attempt_at: Date;
       lease_generation: number;
       lease_expires_at: Date;
+      case_version: number;
     }>(
       `WITH candidate AS (
-        SELECT id FROM incident_outbox
-        WHERE next_attempt_at <= $1
-          AND (status = 'pending' OR (status = 'leased' AND lease_expires_at <= $1))
-        ORDER BY next_attempt_at, created_at
-        FOR UPDATE SKIP LOCKED LIMIT 1
+        SELECT o.id, a.case_version FROM incident_outbox o
+        JOIN incident_attempts a ON a.id = o.attempt_id
+        WHERE o.next_attempt_at <= $1
+          AND (o.status = 'pending' OR (o.status = 'leased' AND o.lease_expires_at <= $1))
+        ORDER BY o.next_attempt_at, o.created_at
+        FOR UPDATE OF o SKIP LOCKED LIMIT 1
       )
       UPDATE incident_outbox o SET
         status = 'leased', lease_owner = $2,
@@ -353,7 +427,7 @@ export class PgCaseRepository {
         dispatch_attempts = dispatch_attempts + 1,
         updated_at = now()
       FROM candidate WHERE o.id = candidate.id
-      RETURNING o.*`,
+      RETURNING o.*, candidate.case_version`,
       [now, owner, leaseMs],
     );
     const row = result.rows[0];
@@ -370,6 +444,7 @@ export class PgCaseRepository {
       leaseExpiresAt: row.lease_expires_at,
       owner,
       generation: row.lease_generation,
+      caseVersion: row.case_version,
     };
   }
 
@@ -401,8 +476,9 @@ export class PgCaseRepository {
         [row.case_id, input.to, nextVersion],
       );
       await client.query(
-        `UPDATE incident_attempts SET state = $2, updated_at = now() WHERE id = $1`,
-        [input.attemptId, input.to],
+        `UPDATE incident_attempts SET state = $2, case_version = $3, updated_at = now()
+         WHERE id = $1`,
+        [input.attemptId, input.to, nextVersion],
       );
       await this.insertTransition(client, {
         caseId: row.case_id,
@@ -443,6 +519,21 @@ export class PgCaseRepository {
       );
       const row = selected.rows[0];
       if (!row) throw new Error('STALE_LEASE');
+      if (row.version !== input.expectedCaseVersion) {
+        await client.query(
+          `UPDATE incident_outbox SET status = 'failed', reason_code = 'STALE_CASE_VERSION',
+             lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+           WHERE id = $1`,
+          [input.outboxId],
+        );
+        await client.query(
+          `UPDATE incident_approval_permits SET status = 'superseded'
+           WHERE attempt_id = $1 AND status = 'pending'`,
+          [row.attempt_id],
+        );
+        await client.query('COMMIT');
+        return;
+      }
       const exhausted = row.dispatch_attempts >= (this.options.maxDispatchAttempts ?? 5);
       const retry = input.classification === 'retryable' && !exhausted;
       const nextState: CaseState = retry ? 'retry_wait' : 'recoverable_failure';
@@ -453,8 +544,9 @@ export class PgCaseRepository {
         [row.case_id, nextState, nextVersion],
       );
       await client.query(
-        `UPDATE incident_attempts SET state = $2, updated_at = now() WHERE id = $1`,
-        [row.attempt_id, nextState],
+        `UPDATE incident_attempts SET state = $2, case_version = $3, updated_at = now()
+         WHERE id = $1`,
+        [row.attempt_id, nextState, nextVersion],
       );
       await client.query(
         `UPDATE incident_outbox SET status = $2, reason_code = $3,
@@ -499,9 +591,11 @@ export class PgCaseRepository {
       case_id: string;
       delivery_id: string;
       state: CaseState;
+      case_version: number;
       mastra_run_id: string | null;
     }>(
-      'SELECT id, case_id, delivery_id, state, mastra_run_id FROM incident_attempts WHERE id = $1',
+      `SELECT id, case_id, delivery_id, state, case_version, mastra_run_id
+       FROM incident_attempts WHERE id = $1`,
       [id],
     );
     const row = result.rows[0];
@@ -511,6 +605,7 @@ export class PgCaseRepository {
       caseId: row.case_id,
       deliveryId: row.delivery_id,
       state: row.state,
+      caseVersion: row.case_version,
       ...(row.mastra_run_id ? { mastraRunId: row.mastra_run_id } : {}),
     };
   }
@@ -532,6 +627,68 @@ export class PgCaseRepository {
       [outboxId, owner, generation],
     );
     if (result.rowCount !== 1) throw new Error('STALE_LEASE');
+  }
+
+  async projectWorkflowOutcome(input: WorkflowProjectionInput): Promise<void> {
+    assertReasonCode(input.reasonCode);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const selected = await client.query<{
+        attempt_id: string;
+        case_id: string;
+        state: CaseState;
+        version: number;
+      }>(
+        `SELECT o.attempt_id, a.case_id, a.state, c.version
+         FROM incident_outbox o
+         JOIN incident_attempts a ON a.id = o.attempt_id
+         JOIN incident_cases c ON c.id = a.case_id
+         WHERE o.id = $1 AND o.lease_owner = $2 AND o.lease_generation = $3
+         FOR UPDATE OF o, a, c`,
+        [input.outboxId, input.leaseOwner, input.leaseGeneration],
+      );
+      const row = selected.rows[0];
+      if (!row) throw new Error('STALE_LEASE');
+      if (row.version !== input.expectedCaseVersion) throw new Error('STALE_CASE_VERSION');
+      const nextVersion = row.version + 1;
+      await client.query(
+        `UPDATE incident_cases SET state = $2, version = $3, updated_at = now() WHERE id = $1`,
+        [row.case_id, input.to, nextVersion],
+      );
+      await client.query(
+        `UPDATE incident_attempts SET state = $2, case_version = $3, updated_at = now()
+         WHERE id = $1`,
+        [row.attempt_id, input.to, nextVersion],
+      );
+      if (input.to === 'approval_pending') {
+        await client.query(
+          `UPDATE incident_approval_permits SET case_version = $2
+           WHERE attempt_id = $1 AND status = 'pending'`,
+          [row.attempt_id, nextVersion],
+        );
+      }
+      await client.query(
+        `UPDATE incident_outbox SET status = $2, reason_code = $3,
+           lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+         WHERE id = $1`,
+        [input.outboxId, input.outboxStatus ?? 'completed', input.reasonCode],
+      );
+      await this.insertTransition(client, {
+        caseId: row.case_id,
+        attemptId: row.attempt_id,
+        fromState: row.state,
+        toState: input.to,
+        caseVersion: nextVersion,
+        reasonCode: input.reasonCode,
+      });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async insertTransition(

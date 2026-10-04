@@ -6,6 +6,7 @@ import { InMemoryApprovalRepository } from '../src/persistence/repositories/appr
 
 const binding: PermitBinding = {
   caseId: 'case-1',
+  caseVersion: 1,
   attemptId: 'attempt-1',
   mastraRunId: 'run-1',
   suspendedStep: 'governed-approval',

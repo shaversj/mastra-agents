@@ -35,8 +35,11 @@ class JwtAuthProvider extends MastraAuthProvider<AuthenticatedPrincipal> {
     }
   }
 
-  authorizeUser(): boolean {
-    return true;
+  authorizeUser(_user: AuthenticatedPrincipal, request: Request | { raw?: Request }): boolean {
+    const raw = request instanceof Request ? request : request.raw;
+    if (!raw) return false;
+    const path = new URL(raw.url).pathname;
+    return !/^\/api\/workflows\/[^/]+\/resume(?:-|\/|$)/u.test(path);
   }
 
   override mapUserToResourceId(user: AuthenticatedPrincipal): string {
