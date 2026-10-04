@@ -51,6 +51,7 @@ async function runWorkflow(output: Record<string, unknown>) {
     inputData: {
       attemptId: 'attempt-1',
       incident: { service: 'checkout-api' },
+      certificationMode: false,
       manifest: {
         id: 'manifest-1',
         attemptId: 'attempt-1',
@@ -112,6 +113,7 @@ describe('incident triage Mastra workflow', () => {
       inputData: {
         attemptId: 'attempt-1',
         incident: { service: 'api' },
+        certificationMode: false,
         manifest: {
           id: 'manifest',
           attemptId: 'attempt-1',

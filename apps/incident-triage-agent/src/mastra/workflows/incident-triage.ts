@@ -18,6 +18,7 @@ const manifestItemSchema = z.object({
 export const workflowInputSchema = z.object({
   attemptId: z.string().min(1),
   incident: z.record(z.string(), z.unknown()),
+  certificationMode: z.boolean().default(false),
   manifest: z.object({
     id: z.string().min(1),
     attemptId: z.string().min(1),
@@ -30,6 +31,7 @@ export const workflowInputSchema = z.object({
 const workflowOutputSchema = z.object({
   attemptId: z.string(),
   manifestDigest: z.string(),
+  certificationMode: z.boolean(),
   decision: decisionSchema,
   policy: z.object({
     disposition: z.enum(['completed', 'approval_pending', 'human_input_needed']),
@@ -72,6 +74,7 @@ const validateAndApplyPolicy = createStep({
     return {
       attemptId: inputData.input.attemptId,
       manifestDigest: inputData.input.manifest.digest,
+      certificationMode: inputData.input.certificationMode,
       decision,
       policy: applyMitigationPolicy(decision),
     };
@@ -106,7 +109,7 @@ export function createIncidentTriageWorkflow(options: WorkflowApprovalOptions = 
       reasonCode: z.literal('APPROVAL_REQUIRED'),
     }),
     execute: async ({ inputData, resumeData, runId, suspend }) => {
-      if (!inputData.policy.requiresApproval) {
+      if (!inputData.policy.requiresApproval || inputData.certificationMode) {
         return { ...inputData, outcome: { kind: 'advisory' as const, executed: false as const } };
       }
       if (resumeData) {

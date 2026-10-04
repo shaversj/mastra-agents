@@ -13,6 +13,7 @@ async function defaultMigrations(): Promise<Migration[]> {
     ['001_case_engine', './migrations/001_case_engine.sql'],
     ['002_evidence_ledger', './migrations/002_evidence_ledger.sql'],
     ['003_resume_permits', './migrations/003_resume_permits.sql'],
+    ['004_decision_certification', './migrations/004_decision_certification.sql'],
   ] as const;
   return Promise.all(
     definitions.map(async ([id, path]) => ({

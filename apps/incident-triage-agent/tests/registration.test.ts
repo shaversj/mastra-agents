@@ -22,6 +22,7 @@ describe('Mastra registration', () => {
 
     expect(Object.keys(mastra.listAgents())).toEqual([appMetadata.agentId]);
     expect(Object.keys(mastra.listWorkflows())).toEqual([appMetadata.workflowId]);
+    expect(Object.keys(mastra.listScorers() ?? {})).toEqual(['incident-decision-gate']);
     expect(
       mastra.getServer()?.apiRoutes?.map((route) => [route.method, route.path, route.requiresAuth]),
     ).toEqual(

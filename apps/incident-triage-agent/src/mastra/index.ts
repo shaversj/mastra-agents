@@ -14,6 +14,7 @@ import { PgApprovalRepository } from '../persistence/repositories/approval-repos
 import { PgCaseRepository } from '../persistence/repositories/case-repository.js';
 import { createJwtAuthProvider } from '../security/auth.js';
 import { createIncidentTriageAgent } from './agents/incident-triage.js';
+import { incidentDecisionGate, incidentDecisionGateId } from './scorers/incident-decision-gate.js';
 import { createIncidentTriageWorkflow } from './workflows/incident-triage.js';
 
 const config = loadAppConfig();
@@ -63,6 +64,9 @@ export const mastra = new Mastra({
   },
   workflows: {
     [appMetadata.workflowId]: incidentTriageWorkflow,
+  },
+  scorers: {
+    [incidentDecisionGateId]: incidentDecisionGate,
   },
   storage,
   observability: new Observability({
