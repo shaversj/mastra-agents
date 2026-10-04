@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: Mastra Incident-Triage Architecture</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #59657a;
+      --line: #d9e0ec;
+      --accent: #3157c8;
+      --accent-soft: #e9efff;
+      --accent-text: #183a9c;
+      --good-soft: #e7f6ed;
+      --good-text: #17643b;
+      --warn-soft: #fff3d8;
+      --warn-text: #7a4b00;
+      --shadow: 0 10px 32px rgba(31, 45, 78, .08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101521;
+        --panel: #171e2d;
+        --text: #edf1f8;
+        --muted: #b7c0d0;
+        --line: #303a4f;
+        --accent: #8ca7ff;
+        --accent-soft: #202f58;
+        --accent-text: #d8e1ff;
+        --good-soft: #163a2a;
+        --good-text: #bcebcf;
+        --warn-soft: #483515;
+        --warn-text: #ffe1a1;
+        --shadow: none;
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.6;
+    }
+    main { max-width: 940px; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
+    header { margin-bottom: 2.5rem; }
+    h1 { margin: .3rem 0 .7rem; font-size: clamp(2rem, 5vw, 3.4rem); line-height: 1.05; letter-spacing: -.035em; }
+    h2 { margin: 3rem 0 1rem; font-size: 1.45rem; letter-spacing: -.015em; }
+    h3 { margin: 0; font-size: 1.25rem; line-height: 1.3; }
+    p { max-width: 72ch; }
+    a { color: var(--accent); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+    strong { color: inherit; }
+    .eyebrow { color: var(--accent); font-size: .74rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+    .lede { color: var(--muted); font-size: 1.08rem; max-width: 68ch; }
+    .meta, .stats, .idea-meta { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: 1rem; }
+    .chip { border: 1px solid var(--line); border-radius: 999px; padding: .28rem .65rem; background: var(--panel); color: var(--muted); font-size: .82rem; }
+    .chip.accent { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
+    .chip.good { background: var(--good-soft); color: var(--good-text); border-color: transparent; }
+    nav, .callout, .flow, article.idea, table { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+    nav { padding: 1rem 1.2rem; margin: 2rem 0; }
+    nav ul, .jump-list { margin: .5rem 0 0; padding-left: 1.25rem; columns: 2; }
+    nav li, .jump-list li { break-inside: avoid; margin: .25rem 0; }
+    section > p, section > ul { max-width: 76ch; }
+    .axes { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: .8rem; padding: 0; list-style: none; }
+    .axes li { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: .9rem 1rem; }
+    .flow { padding: 1.2rem; margin: 1.4rem 0; overflow-x: auto; }
+    .flow ol { list-style: none; display: flex; align-items: stretch; gap: .55rem; margin: 0; padding: 0; min-width: 760px; }
+    .flow li { flex: 1; background: var(--accent-soft); color: var(--accent-text); border-radius: 10px; padding: .75rem; font-weight: 700; font-size: .86rem; text-align: center; }
+    .flow .arrow { flex: 0; align-self: center; background: transparent; padding: 0; font-size: 1.2rem; }
+    article.idea { padding: 1.35rem; margin: 1rem 0; scroll-margin-top: 1rem; }
+    .idea-title { display: flex; gap: .75rem; align-items: flex-start; }
+    .id-chip { flex: 0 0 auto; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-weight: 800; padding: .25rem .55rem; }
+    dl { display: grid; grid-template-columns: 8.5rem 1fr; gap: .5rem .85rem; margin: 1.1rem 0 0; }
+    dt { color: var(--muted); font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    dd { margin: 0; }
+    .callout { padding: 1rem 1.1rem; background: var(--good-soft); color: var(--good-text); }
+    .callout p { margin: .25rem 0; }
+    table { width: 100%; border-collapse: separate; border-spacing: 0; overflow: hidden; }
+    th, td { padding: .8rem .9rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: var(--accent-soft); color: var(--accent-text); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    footer { margin-top: 3rem; border-top: 1px solid var(--line); padding-top: 1rem; color: var(--muted); font-size: .82rem; }
+    @media (max-width: 680px) {
+      nav ul, .jump-list { columns: 1; }
+      dl { grid-template-columns: 1fr; }
+      dt { margin-top: .45rem; }
+      main { padding-top: 2rem; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Architecture ideation</div>
+    <h1>Mastra Incident-Triage Architecture</h1>
+    <p class="lede">Six improvements that make the system more durable, auditable, and secure without turning the model into the control plane or expanding the portfolio artifact into production actuation.</p>
+    <div class="meta">
+      <span class="chip"><time datetime="2026-10-03">2026-10-03</time></span>
+      <span class="chip">Topic: mastra-incident-triage-architecture</span>
+      <span class="chip">Mode: repo-grounded</span>
+      <span class="chip accent">Focus: architecture improvements</span>
+    </div>
+    <div class="stats">
+      <span class="chip good">45 raw candidates</span>
+      <span class="chip good">6 survivors</span>
+      <span class="chip good">5 axes covered</span>
+    </div>
+  </header>
+
+  <nav aria-label="Document navigation">
+    <strong>Contents</strong>
+    <ul>
+      <li><a href="#grounding-context">Grounding Context</a></li>
+      <li><a href="#topic-axes">Topic Axes</a></li>
+      <li><a href="#ranked-ideas">Ranked Ideas</a></li>
+      <li><a href="#rejection-summary">Rejection Summary</a></li>
+    </ul>
+  </nav>
+
+  <section id="grounding-context">
+    <div class="eyebrow">What the evidence says</div>
+    <h2>Grounding Context</h2>
+    <p>The current incident-triage project already has the right fundamental trust split: deterministic software owns evidence, validation, policy, approval staging, provenance, and evaluation; the LLM contributes one bounded judgment. The architectural weaknesses are around that core: synchronous webhook execution, terminal-only persistence, positional evidence identity, approval state not bound to an exact run artifact, incomplete version capture, mixed HTTP trust surfaces, and liveness-only health.</p>
+    <p>The Mastra workspace provides an appropriate independent deployment boundary and current Mastra APIs provide typed workflows, storage, suspend/resume, observability, authentication middleware, request context, and custom routes. None of those capabilities automatically creates a safe incident system; the application must still define the authoritative data and policy contracts.</p>
+    <div class="callout">
+      <div class="eyebrow">Central conclusion</div>
+      <p><strong>Improve the deterministic shell before making the agent more capable.</strong> The highest-value changes reduce ambiguity during delivery, recovery, evidence handling, approval, and release—not prompt sophistication or agent count.</p>
+    </div>
+  </section>
+
+  <section id="topic-axes">
+    <div class="eyebrow">Coverage model</div>
+    <h2>Topic Axes</h2>
+    <ul class="axes">
+      <li>Durable intake and execution</li>
+      <li>Evidence and reasoning integrity</li>
+      <li>Approval and action authority</li>
+      <li>Evaluation and replay</li>
+      <li>Service, deployment, and security boundaries</li>
+    </ul>
+    <div class="flow" role="img" aria-label="A conceptual sequence from durable intake through evidence, judgment, approval, and certification">
+      <ol>
+        <li>Durable receipt</li><li class="arrow" aria-hidden="true">→</li>
+        <li>Sealed evidence</li><li class="arrow" aria-hidden="true">→</li>
+        <li>Bounded judgment</li><li class="arrow" aria-hidden="true">→</li>
+        <li>Governed resume</li><li class="arrow" aria-hidden="true">→</li>
+        <li>Replay certification</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="ranked-ideas">
+    <div class="eyebrow">Ranked shortlist</div>
+    <h2>Ranked Ideas</h2>
+    <ol class="jump-list">
+      <li><a href="#i1">I1. Postgres incident case engine</a></li>
+      <li><a href="#i2">I2. Content-addressed evidence ledger</a></li>
+      <li><a href="#i3">I3. Single-use governed resume permit</a></li>
+      <li><a href="#i4">I4. Decision certification pipeline</a></li>
+      <li><a href="#i5">I5. Mastra security kernel and readiness</a></li>
+      <li><a href="#i6">I6. Deterministic discriminator lanes</a></li>
+    </ol>
+
+    <article class="idea" id="i1">
+      <div class="idea-title"><span class="id-chip">I1</span><h3>Postgres incident case engine</h3></div>
+      <div class="idea-meta"><span class="chip">Durable intake and execution</span><span class="chip good">Confidence 93%</span><span class="chip">Complexity High</span></div>
+      <dl>
+        <dt>Description</dt><dd>Turn intake into a short authenticated transaction: persist an immutable delivery envelope and initial checkpoint, return <code>202</code>, then advance the case asynchronously. Separate delivery identity, incident correlation, and workflow attempt; use an append-only transition journal, fenced leases, scheduled retries, and an outbox so interrupted work resumes without duplicating the model judgment.</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> The current handler performs evidence retrieval, inference, terminal persistence, and replay-claim release inside the request, while workflow transitions exist only in memory. Payment idempotency and durable workflow histories provide matching external precedent.</dd>
+        <dt>Rationale</dt><dd>This establishes the public reliability contract everything else depends on. Postgres is already part of the system, so it captures most durability value without introducing Kafka or Temporal before the workload justifies them.</dd>
+        <dt>Downsides</dt><dd>Requires a real state machine, worker leasing, retry policy, operational cleanup, and careful transactional boundaries. It is the largest change and should be designed before the Mastra port, not discovered during it.</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="i2">
+      <div class="idea-title"><span class="id-chip">I2</span><h3>Content-addressed evidence ledger</h3></div>
+      <div class="idea-meta"><span class="chip">Evidence and reasoning integrity</span><span class="chip good">Confidence 95%</span><span class="chip">Complexity Medium</span></div>
+      <dl>
+        <dt>Description</dt><dd>Replace positional identifiers such as <code>log:0</code> with stable identities over source locator, observation time, collector version, redaction version, and normalized payload digest. Seal each run's evidence manifest with freshness, trust-tier, checksum, and collection metadata.</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> Current evidence records have only five fields, positional IDs shift when ordering changes, and duplicate IDs can collapse in maps without proving freshness, collector identity, or content integrity.</dd>
+        <dt>Rationale</dt><dd>Stable evidence identity becomes the shared primitive for citations, approval binding, replay, cache reuse, provenance audit, and change detection. It also lets deterministic code prove exactly what the model saw.</dd>
+        <dt>Downsides</dt><dd>Canonicalization rules must be stable and privacy-aware. Storing digests does not remove retention obligations, and raw sensitive evidence may need a separate protected store.</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="i3">
+      <div class="idea-title"><span class="id-chip">I3</span><h3>Single-use governed resume permit</h3></div>
+      <div class="idea-meta"><span class="chip">Approval and action authority</span><span class="chip good">Confidence 94%</span><span class="chip">Complexity Medium</span></div>
+      <dl>
+        <dt>Description</dt><dd>Use Mastra suspension as a workflow pause, but make application approval an authenticated, expiring, single-use capability over the exact checkpoint, evidence manifest, bounded judgment, catalog and policy versions, staged parameters, and verification plan. Resume re-runs deterministic safety checks before recording the simulation-only outcome.</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> Current approval records bind primarily to incident and catalog IDs, omit actor, role, reason, checkpoint, and evidence identity, and live in a separate JSON store rather than durable workflow state.</dd>
+        <dt>Rationale</dt><dd>“Approved” becomes permission for one reviewed artifact rather than mutable ambient state. Any material change invalidates the permit and forces a new decision.</dd>
+        <dt>Downsides</dt><dd>Requires operator identity, authorization policy, expiry semantics, optimistic concurrency, and a durable audit model. For a simulation-only portfolio path, the full capability model may be staged after basic authenticated approval.</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="i4">
+      <div class="idea-title"><span class="id-chip">I4</span><h3>Decision certification pipeline</h3></div>
+      <div class="idea-meta"><span class="chip">Evaluation and replay</span><span class="chip good">Confidence 91%</span><span class="chip">Complexity High</span></div>
+      <dl>
+        <dt>Description</dt><dd>Persist a reproducible decision capsule for every judgment: normalized incident, sealed evidence manifest, model/provider settings, prompt and schema hashes, policy/catalog/redaction versions, application build, redacted request/response, structured decision, and gate outcomes. Replay candidate inference bundles over retained capsules with all action paths disabled; prioritize material disagreements and promote repeated reviewed failures into the existing taxonomy and regression suite.</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> The project already has strong failure discovery and executable regressions, but retained runs omit key decision-producing versions and cannot be re-executed as historical worlds. <strong>external:</strong> Datadog's incident-agent evaluation work uses reconstructed historical snapshots with real noise and feedback-derived labels.</dd>
+        <dt>Rationale</dt><dd>Operational history becomes a compounding private benchmark and release-control mechanism. Framework, prompt, policy, or model changes become attributable comparisons rather than guesses.</dd>
+        <dt>Downsides</dt><dd>Exact output reproduction is not guaranteed when hosted models change. Capsules need redaction, retention, and access policy, and replay cohorts must remain representative rather than merely large.</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="i5">
+      <div class="idea-title"><span class="id-chip">I5</span><h3>Mastra security kernel and capability-aware readiness</h3></div>
+      <div class="idea-meta"><span class="chip">Service, deployment, and security boundaries</span><span class="chip good">Confidence 92%</span><span class="chip">Complexity Medium</span></div>
+      <dl>
+        <dt>Description</dt><dd>Keep one independently deployable image, but expose only incident-specific contracts. Give signed intake, private workflow workers, operator reads, and approval import distinct principals and policies; keep generic Mastra agent endpoints internal. Separate immutable governance events from short-lived redacted model traces, and publish reason-coded readiness that distinguishes required dependencies from explicitly degraded evidence sources.</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> The legacy server mixes webhook, console, review, and approval mutation; approval authorization is weaker than run-review authorization. The Mastra workspace preserves a strong app/image boundary but explicitly defers application authentication and dependency-aware readiness.</dd>
+        <dt>Rationale</dt><dd>This closes the current authorization asymmetry and makes failure behavior reviewable without fragmenting the app into unnecessary services.</dd>
+        <dt>Downsides</dt><dd>One image with multiple runtime roles still needs careful process configuration and least-privilege credentials. Readiness matrices can become misleading unless backed by dependency probes and tested degraded modes.</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="i6">
+      <div class="idea-title"><span class="id-chip">I6</span><h3>Deterministic discriminator lanes</h3></div>
+      <div class="idea-meta"><span class="chip">Evidence and reasoning integrity</span><span class="chip accent">Confidence 82%</span><span class="chip">Complexity Medium</span></div>
+      <dl>
+        <dt>Description</dt><dd>Replace the fixed “collect everything” pass with policy-authored, bounded query recipes that gather supporting, disconfirming, and missing signals for plausible incident classes. Invoke the model only when class-specific evidence obligations are satisfied and require it to cite the strongest contrary evidence as well as its selected class.</dd>
+        <dt>Basis</dt><dd><strong>external:</strong> Datadog reported that hypothesis-specific evidence gathering outperformed collecting everything and summarizing. <strong>direct:</strong> The current implementation follows a fixed exhaustive retrieval order and admits structurally valid decisions with incomplete semantic evidence.</dd>
+        <dt>Rationale</dt><dd>This can reduce latency, tokens, and irrelevant context while improving diagnostic discipline without granting the model tools or additional reasoning turns.</dd>
+        <dt>Downsides</dt><dd>The recipes can encode blind spots or become expensive policy code. This idea should remain behind an evaluation gate until retained-world tests prove it beats the simpler evidence pass.</dd>
+      </dl>
+    </article>
+  </section>
+
+  <section id="rejection-summary">
+    <div class="eyebrow">What did not survive</div>
+    <h2>Rejection Summary</h2>
+    <table>
+      <thead><tr><th>#</th><th>Idea</th><th>Reason rejected or merged</th></tr></thead>
+      <tbody>
+        <tr id="r1"><td>R1</td><td>Correlated case epochs</td><td>Grounded, but “material change” is undefined. Retain as a later capability of I1 after correlation semantics are specified.</td></tr>
+        <tr id="r2"><td>R2</td><td>Derive every action from policy</td><td>Refuted: the current catalog does not encode disposition rules for all recommendation actions, so policy cannot yet replace model action choice safely.</td></tr>
+        <tr id="r3"><td>R3</td><td>Governance catalog compiler</td><td>Would create disproportionate DSL and code-generation complexity for one portfolio application. Keep the catalog authoritative without generating the whole system.</td></tr>
+        <tr id="r4"><td>R4</td><td>External ITSM authority handoff</td><td>Plausible later integration, but no current adopter or product requirement grounds it.</td></tr>
+        <tr id="r5"><td>R5</td><td>Capability readiness as a separate idea</td><td>Merged into I5 because route trust and safe traffic admission are one operational boundary.</td></tr>
+        <tr id="r6"><td>R6</td><td>Replay capsule and disagreement mining as separate ideas</td><td>Merged into I4; the capsule has value because it enables comparative replay and promotion control.</td></tr>
+        <tr id="r7"><td>R7</td><td>Kafka- or Temporal-first durability</td><td>Premature operational surface for this project. I1 preserves an adapter boundary so stronger workflow infrastructure can be introduced when scale or waiting periods justify it.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer class="composition-signal">Composed 2026-10-03T22:26Z by ce-ideate from the user prompt “Any other ways to improve architecture” and grounded in the local <code>mastra-agents</code> and <code>incident-triage-demo</code> repositories.</footer>
+</main>
+</body>
+</html>
