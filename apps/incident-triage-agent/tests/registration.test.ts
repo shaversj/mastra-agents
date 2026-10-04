@@ -22,5 +22,15 @@ describe('Mastra registration', () => {
 
     expect(Object.keys(mastra.listAgents())).toEqual([appMetadata.agentId]);
     expect(Object.keys(mastra.listWorkflows())).toEqual([appMetadata.workflowId]);
+    expect(
+      mastra.getServer()?.apiRoutes?.map((route) => [route.method, route.path, route.requiresAuth]),
+    ).toEqual(
+      expect.arrayContaining([
+        ['POST', '/incidents', false],
+        ['GET', '/cases/:caseId', undefined],
+        ['GET', '/health', false],
+        ['GET', '/readyz', false],
+      ]),
+    );
   });
 });
