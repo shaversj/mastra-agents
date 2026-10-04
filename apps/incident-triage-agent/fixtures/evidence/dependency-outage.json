@@ -1,0 +1,12 @@
+[
+  {
+    "sourceLocator": "metrics/checkout-api/dependency-errors",
+    "observedAt": "2026-10-03T18:00:00.000Z",
+    "normalizedPayload": {
+      "service": "checkout-api",
+      "status": "degraded",
+      "value": 0.31,
+      "unit": "ratio"
+    }
+  }
+]

@@ -9,8 +9,16 @@ export interface Migration {
 }
 
 async function defaultMigrations(): Promise<Migration[]> {
-  const url = new URL('./migrations/001_case_engine.sql', import.meta.url);
-  return [{ id: '001_case_engine', sql: await readFile(url, 'utf8') }];
+  const definitions = [
+    ['001_case_engine', './migrations/001_case_engine.sql'],
+    ['002_evidence_ledger', './migrations/002_evidence_ledger.sql'],
+  ] as const;
+  return Promise.all(
+    definitions.map(async ([id, path]) => ({
+      id,
+      sql: await readFile(new URL(path, import.meta.url), 'utf8'),
+    })),
+  );
 }
 
 function checksum(sql: string): string {
