@@ -1,0 +1,10 @@
+{
+  "version": "mitigation-catalog/v1",
+  "entries": [
+    { "action": "escalate_owner", "posture": "advisory", "simulationOnly": true },
+    { "action": "rollback_release", "posture": "approval_required", "simulationOnly": true },
+    { "action": "scale_service", "posture": "approval_required", "simulationOnly": true },
+    { "action": "continue_monitoring", "posture": "advisory", "simulationOnly": true },
+    { "action": "request_human_input", "posture": "human_input", "simulationOnly": true }
+  ]
+}

@@ -201,6 +201,24 @@ export class InMemoryCaseRepository {
     return this.attempts.get(id);
   }
 
+  async bindMastraRun(attemptId: string, runId: string): Promise<void> {
+    const attempt = this.attempts.get(attemptId);
+    if (!attempt) throw new Error('ATTEMPT_NOT_FOUND');
+    if (attempt.mastraRunId && attempt.mastraRunId !== runId) throw new Error('RUN_ALREADY_BOUND');
+    attempt.mastraRunId = runId;
+  }
+
+  async markOutboxDispatched(outboxId: string, owner: string, generation: number): Promise<void> {
+    const outbox = [...this.outbox.values()].find((row) => row.id === outboxId);
+    if (!outbox) throw new Error('OUTBOX_NOT_FOUND');
+    if (outbox.leaseOwner !== owner || outbox.leaseGeneration !== generation) {
+      throw new Error('STALE_LEASE');
+    }
+    outbox.status = 'completed';
+    delete outbox.leaseOwner;
+    delete outbox.leaseExpiresAt;
+  }
+
   snapshot(): {
     cases: CaseRecord[];
     attempts: AttemptRecord[];
@@ -384,6 +402,69 @@ export class PgCaseRepository {
     }
   }
 
+  async recordDispatchFailure(input: DispatchFailureInput): Promise<void> {
+    assertReasonCode(input.reasonCode);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const selected = await client.query<{
+        attempt_id: string;
+        case_id: string;
+        state: CaseState;
+        version: number;
+        dispatch_attempts: number;
+      }>(
+        `SELECT o.attempt_id, a.case_id, a.state, c.version, o.dispatch_attempts
+         FROM incident_outbox o
+         JOIN incident_attempts a ON a.id = o.attempt_id
+         JOIN incident_cases c ON c.id = a.case_id
+         WHERE o.id = $1 AND o.lease_owner = $2 AND o.lease_generation = $3
+         FOR UPDATE OF o, a, c`,
+        [input.outboxId, input.leaseOwner, input.leaseGeneration],
+      );
+      const row = selected.rows[0];
+      if (!row) throw new Error('STALE_LEASE');
+      const exhausted = row.dispatch_attempts >= (this.options.maxDispatchAttempts ?? 5);
+      const retry = input.classification === 'retryable' && !exhausted;
+      const nextState: CaseState = retry ? 'retry_wait' : 'recoverable_failure';
+      const nextVersion = row.version + 1;
+
+      await client.query(
+        `UPDATE incident_cases SET state = $2, version = $3, updated_at = now() WHERE id = $1`,
+        [row.case_id, nextState, nextVersion],
+      );
+      await client.query(
+        `UPDATE incident_attempts SET state = $2, updated_at = now() WHERE id = $1`,
+        [row.attempt_id, nextState],
+      );
+      await client.query(
+        `UPDATE incident_outbox SET status = $2, reason_code = $3,
+           next_attempt_at = $4, lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+         WHERE id = $1`,
+        [
+          input.outboxId,
+          retry ? 'pending' : 'failed',
+          input.reasonCode,
+          retry ? new Date(input.now.getTime() + 1000 * 2 ** row.dispatch_attempts) : input.now,
+        ],
+      );
+      await this.insertTransition(client, {
+        caseId: row.case_id,
+        attemptId: row.attempt_id,
+        fromState: row.state,
+        toState: nextState,
+        caseVersion: nextVersion,
+        reasonCode: input.reasonCode,
+      });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async purgeExpiredDeliveryPayloads(cutoff: Date): Promise<number> {
     const result = await this.pool.query(
       `UPDATE incident_deliveries SET redacted_payload = NULL
@@ -391,6 +472,47 @@ export class PgCaseRepository {
       [cutoff],
     );
     return result.rowCount ?? 0;
+  }
+
+  async getAttempt(id: string): Promise<AttemptRecord | undefined> {
+    const result = await this.pool.query<{
+      id: string;
+      case_id: string;
+      delivery_id: string;
+      state: CaseState;
+      mastra_run_id: string | null;
+    }>(
+      'SELECT id, case_id, delivery_id, state, mastra_run_id FROM incident_attempts WHERE id = $1',
+      [id],
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      id: row.id,
+      caseId: row.case_id,
+      deliveryId: row.delivery_id,
+      state: row.state,
+      ...(row.mastra_run_id ? { mastraRunId: row.mastra_run_id } : {}),
+    };
+  }
+
+  async bindMastraRun(attemptId: string, runId: string): Promise<void> {
+    const result = await this.pool.query(
+      `UPDATE incident_attempts SET mastra_run_id = $2, updated_at = now()
+       WHERE id = $1 AND (mastra_run_id IS NULL OR mastra_run_id = $2)`,
+      [attemptId, runId],
+    );
+    if (result.rowCount !== 1) throw new Error('RUN_ALREADY_BOUND');
+  }
+
+  async markOutboxDispatched(outboxId: string, owner: string, generation: number): Promise<void> {
+    const result = await this.pool.query(
+      `UPDATE incident_outbox SET status = 'completed', lease_owner = NULL,
+         lease_expires_at = NULL, updated_at = now()
+       WHERE id = $1 AND lease_owner = $2 AND lease_generation = $3`,
+      [outboxId, owner, generation],
+    );
+    if (result.rowCount !== 1) throw new Error('STALE_LEASE');
   }
 
   private async insertTransition(

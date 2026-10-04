@@ -1,4 +1,5 @@
 import { Mastra } from '@mastra/core/mastra';
+import { PostgresStore } from '@mastra/pg';
 
 import { appMetadata, loadAppConfig } from '../config/app.js';
 import { createJwtAuthProvider } from '../security/auth.js';
@@ -14,6 +15,11 @@ export const mastra = new Mastra({
   workflows: {
     [appMetadata.workflowId]: incidentTriageWorkflow,
   },
+  storage: new PostgresStore({
+    id: 'incident-mastra-storage',
+    connectionString: config.databaseUrl,
+    schemaName: 'mastra_incident_triage',
+  }),
   server: {
     auth: createJwtAuthProvider(config),
     host: config.host,
