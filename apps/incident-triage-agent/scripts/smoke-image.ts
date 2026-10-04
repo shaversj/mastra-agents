@@ -45,7 +45,18 @@ async function waitForPostgres(): Promise<void> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
-      await docker('exec', postgres, 'pg_isready', '-U', 'postgres', '-d', 'incident_triage');
+      // The image's bootstrap server accepts Unix-socket connections before its final restart.
+      await docker(
+        'exec',
+        postgres,
+        'pg_isready',
+        '-h',
+        '127.0.0.1',
+        '-U',
+        'postgres',
+        '-d',
+        'incident_triage',
+      );
       return;
     } catch {
       await delay(250);
