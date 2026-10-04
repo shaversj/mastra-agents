@@ -9,6 +9,7 @@ export default tseslint.config(
       '**/.mastra/**',
       '**/coverage/**',
       '**/dist/**',
+      '.agents/skills/**',
       'docs/**',
       'pnpm-lock.yaml',
     ],
