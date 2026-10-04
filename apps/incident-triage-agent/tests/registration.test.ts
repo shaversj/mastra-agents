@@ -28,6 +28,7 @@ describe('Mastra registration', () => {
       expect.arrayContaining([
         ['POST', '/incidents', false],
         ['GET', '/cases/:caseId', undefined],
+        ['POST', '/approvals/:permitId', undefined],
         ['GET', '/health', false],
         ['GET', '/readyz', false],
       ]),

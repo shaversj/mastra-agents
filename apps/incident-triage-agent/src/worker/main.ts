@@ -2,6 +2,7 @@ import { loadAppConfig } from '../config/app.js';
 import { mastra } from '../mastra/index.js';
 import { workflowInputSchema } from '../mastra/workflows/incident-triage.js';
 import { createDatabasePool } from '../persistence/db.js';
+import { PgApprovalRepository } from '../persistence/repositories/approval-repository.js';
 import { PgCaseRepository } from '../persistence/repositories/case-repository.js';
 import { dispatchOnce } from './dispatcher.js';
 
@@ -10,6 +11,7 @@ export async function runWorker(): Promise<void> {
   if (config.processRole !== 'worker') throw new Error('PROCESS_ROLE must be worker');
   const pool = createDatabasePool(config);
   const repository = new PgCaseRepository(pool);
+  const approvals = new PgApprovalRepository(pool);
   const workflow = mastra.getWorkflow('incident-triage-workflow');
 
   try {
@@ -19,6 +21,31 @@ export async function runWorker(): Promise<void> {
         workflow,
         workerId: `worker-${process.pid}`,
         leaseMs: config.workerLeaseSeconds * 1000,
+        resume: async (lease) => {
+          const permit = await approvals.getConsumedByAttempt(lease.attemptId);
+          if (
+            !permit ||
+            !permit.actorId ||
+            !permit.actorRole ||
+            !permit.decision ||
+            !permit.reason
+          ) {
+            throw new Error('CONSUMED_PERMIT_NOT_FOUND');
+          }
+          const run = await workflow.createRun({ runId: permit.mastraRunId });
+          const result = await run.resume({
+            step: permit.suspendedStep,
+            resumeData: {
+              permitId: permit.id,
+              decision: permit.decision,
+              reason: permit.reason,
+              actorId: permit.actorId,
+              actorRole: permit.actorRole,
+            },
+          });
+          if (result.status !== 'success') throw new Error('WORKFLOW_RESUME_INCOMPLETE');
+          await approvals.recordSimulationOutcome(permit);
+        },
         loadInput: async (attemptId) => {
           const result = await pool.query<{
             payload: Record<string, unknown>;

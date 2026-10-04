@@ -29,6 +29,7 @@ export const workflowInputSchema = z.object({
 
 const workflowOutputSchema = z.object({
   attemptId: z.string(),
+  manifestDigest: z.string(),
   decision: decisionSchema,
   policy: z.object({
     disposition: z.enum(['completed', 'approval_pending', 'human_input_needed']),
@@ -36,7 +37,14 @@ const workflowOutputSchema = z.object({
     executed: z.literal(false),
     catalogAction: z.enum(nextActions),
   }),
+  outcome: z.object({
+    kind: z.enum(['advisory', 'simulation', 'rejected']),
+    executed: z.literal(false),
+    permitId: z.string().optional(),
+  }),
 });
+
+const policyOutputSchema = workflowOutputSchema.omit({ outcome: true });
 
 const requestJudgment = createStep({
   id: 'request-structured-judgment',
@@ -58,18 +66,70 @@ const requestJudgment = createStep({
 const validateAndApplyPolicy = createStep({
   id: 'validate-and-apply-policy',
   inputSchema: z.object({ input: workflowInputSchema, candidate: z.unknown() }),
-  outputSchema: workflowOutputSchema,
+  outputSchema: policyOutputSchema,
   execute: async ({ inputData }) => {
     const decision = validateDecision(inputData.candidate, inputData.input.manifest);
     return {
       attemptId: inputData.input.attemptId,
+      manifestDigest: inputData.input.manifest.digest,
       decision,
       policy: applyMitigationPolicy(decision),
     };
   },
 });
 
-export function createIncidentTriageWorkflow() {
+const resumeSchema = z.object({
+  permitId: z.string().uuid(),
+  decision: z.enum(['approved', 'rejected']),
+  reason: z.string().min(1),
+  actorId: z.string().min(1),
+  actorRole: z.string().min(1),
+});
+
+interface WorkflowApprovalOptions {
+  createApprovalPermit?: (input: {
+    runId: string;
+    stepId: string;
+    value: z.infer<typeof policyOutputSchema>;
+  }) => Promise<string>;
+  revalidateResume?: (input: z.infer<typeof resumeSchema>) => Promise<void>;
+}
+
+export function createIncidentTriageWorkflow(options: WorkflowApprovalOptions = {}) {
+  const governedApproval = createStep({
+    id: 'governed-approval',
+    inputSchema: policyOutputSchema,
+    outputSchema: workflowOutputSchema,
+    resumeSchema,
+    suspendSchema: z.object({
+      permitId: z.string().uuid(),
+      reasonCode: z.literal('APPROVAL_REQUIRED'),
+    }),
+    execute: async ({ inputData, resumeData, runId, suspend }) => {
+      if (!inputData.policy.requiresApproval) {
+        return { ...inputData, outcome: { kind: 'advisory' as const, executed: false as const } };
+      }
+      if (resumeData) {
+        await options.revalidateResume?.(resumeData);
+        return {
+          ...inputData,
+          outcome: {
+            kind:
+              resumeData.decision === 'approved' ? ('simulation' as const) : ('rejected' as const),
+            executed: false as const,
+            permitId: resumeData.permitId,
+          },
+        };
+      }
+      const permitId = await (options.createApprovalPermit?.({
+        runId,
+        stepId: 'governed-approval',
+        value: inputData,
+      }) ?? Promise.resolve('00000000-0000-4000-8000-000000000000'));
+      return suspend({ permitId, reasonCode: 'APPROVAL_REQUIRED' });
+    },
+  });
+
   return createWorkflow({
     id: appMetadata.workflowId,
     description:
@@ -79,6 +139,7 @@ export function createIncidentTriageWorkflow() {
   })
     .then(requestJudgment)
     .then(validateAndApplyPolicy)
+    .then(governedApproval)
     .commit();
 }
 

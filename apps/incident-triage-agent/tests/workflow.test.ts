@@ -80,12 +80,74 @@ describe('incident triage Mastra workflow', () => {
   ])('maps %s to bounded %s policy', async (incidentClass, action, disposition, approval) => {
     const result = await runWorkflow(decision(incidentClass, action));
 
-    expect(result.status).toBe('success');
-    if (result.status === 'success') {
+    expect(result.status).toBe(approval ? 'suspended' : 'success');
+    if (!approval && result.status === 'success') {
       expect(result.result.policy).toMatchObject({
         disposition,
         requiresApproval: approval,
         executed: false,
+      });
+    }
+  });
+
+  it('resumes one approved permit into a simulation-only outcome', async () => {
+    const workflow = createIncidentTriageWorkflow({
+      createApprovalPermit: async () => '00000000-0000-4000-8000-000000000001',
+    });
+    const mastra = new Mastra({
+      agents: {
+        [appMetadata.agentId]: createIncidentTriageAgent(
+          config,
+          createMockModel({
+            objectGenerationMode: 'json',
+            mockText: decision('bad_deploy', 'rollback_release'),
+            version: 'v2',
+          }) as IncidentAgentModel,
+        ),
+      },
+      workflows: { [appMetadata.workflowId]: workflow },
+    });
+    const run = await mastra.getWorkflow(appMetadata.workflowId).createRun();
+    const started = await run.start({
+      inputData: {
+        attemptId: 'attempt-1',
+        incident: { service: 'api' },
+        manifest: {
+          id: 'manifest',
+          attemptId: 'attempt-1',
+          digest: 'digest',
+          sealedAt: '2026-10-03T18:00:00.000Z',
+          items: [
+            {
+              evidenceId: 'ev-1',
+              source: 'metrics',
+              sourceTier: 'primary',
+              sourceLocator: 'metrics/api',
+              freshness: 'fresh',
+              collectionStatus: 'complete',
+            },
+          ],
+        },
+      },
+    });
+    expect(started.status).toBe('suspended');
+
+    const resumed = await run.resume({
+      step: 'governed-approval',
+      resumeData: {
+        permitId: '00000000-0000-4000-8000-000000000001',
+        decision: 'approved',
+        reason: 'Reviewed',
+        actorId: 'approver',
+        actorRole: 'incident-approver',
+      },
+    });
+    expect(resumed.status).toBe('success');
+    if (resumed.status === 'success') {
+      expect(resumed.result.outcome).toEqual({
+        kind: 'simulation',
+        executed: false,
+        permitId: '00000000-0000-4000-8000-000000000001',
       });
     }
   });

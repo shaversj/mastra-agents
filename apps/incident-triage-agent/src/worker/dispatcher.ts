@@ -30,11 +30,29 @@ export async function dispatchOnce<TInput>(options: {
   workerId: string;
   leaseMs: number;
   now?: Date;
+  resume?: (lease: OutboxLease) => Promise<void>;
 }): Promise<'idle' | 'dispatched' | 'failed'> {
   const now = options.now ?? new Date();
   const lease = await options.repository.claimNext(options.workerId, now, options.leaseMs);
   if (!lease) return 'idle';
-  if (lease.kind !== 'start_workflow') return 'idle';
+  if (lease.kind === 'resume_workflow') {
+    try {
+      if (!options.resume) throw new Error('RESUME_HANDLER_MISSING');
+      await options.resume(lease);
+      await options.repository.markOutboxDispatched(lease.id, options.workerId, lease.generation);
+      return 'dispatched';
+    } catch {
+      await options.repository.recordDispatchFailure({
+        outboxId: lease.id,
+        leaseOwner: options.workerId,
+        leaseGeneration: lease.generation,
+        classification: 'retryable',
+        reasonCode: 'WORKFLOW_RESUME_FAILED',
+        now,
+      });
+      return 'failed';
+    }
+  }
 
   const runId = `incident-${lease.attemptId}-${randomUUID()}`;
   try {
