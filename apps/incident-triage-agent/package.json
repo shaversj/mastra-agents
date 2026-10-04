@@ -15,6 +15,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:postgres": "vitest run tests/postgres",
     "build": "mastra build",
     "start": "mastra start",
     "check": "vitest run && tsc --noEmit"
