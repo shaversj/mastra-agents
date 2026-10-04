@@ -54,6 +54,7 @@ describe('incident decision composite gate', () => {
   it('scores a fully valid attributed outcome as one', async () => {
     expect(evaluateDecisionGate(input, output)).toEqual([]);
     const result = await incidentDecisionGate.run({ input, output });
+    expect(result.analyzeStepResult).toEqual({ failures: [] });
     expect(result.score).toBe(1);
     expect(result.reason).toContain('passed');
   });
