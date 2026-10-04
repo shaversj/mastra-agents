@@ -1,0 +1,10 @@
+{
+  "id": "upstream-timeout",
+  "revision": "v1",
+  "sourceCaseCount": 2,
+  "summary": "A dependency timeout must not be mistaken for local capacity saturation.",
+  "reducedInput": {
+    "service": "checkout-api",
+    "status": "dependency_timeout"
+  }
+}

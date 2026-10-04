@@ -8,7 +8,7 @@ Apps may not import another app's source. Repository tests enforce that boundary
 
 ## Identity and runtime contract
 
-Each app defines `packageName`, `appId`, and `agentId` once in `src/config/app.ts`. Its Mastra registration, tests, image smoke harness, and CI use that app-owned metadata. Each current app registers exactly one agent in `src/mastra/index.ts`.
+Each app defines `packageName`, `appId`, and `agentId` once in `src/config/app.ts`. Its Mastra registration, tests, image smoke harness, and CI use that app-owned metadata. The reference apps register one agent each. The incident app also registers its durable workflow and deterministic release scorer.
 
 `mastra build` writes a self-contained server to the app's `.mastra/output`. The Docker build compiles that output inside Linux and copies only the selected app's generated server into a slim runtime image. The image runs as a non-root user and does not depend on a repository mount or sibling app source.
 
@@ -20,7 +20,13 @@ The black-box server contract is:
 
 These probes are model-free. They use a structural `MODEL_ID` value but do not call a model provider.
 
-Local processes default to `127.0.0.1`. Images listen inside their container on `0.0.0.0`, while the smoke harness publishes the port only on host loopback. Application authentication is deferred, so an external deployment must put authenticated ingress in front of the Mastra server.
+Local processes default to `127.0.0.1`. Images listen inside their container on `0.0.0.0`, while smoke harnesses publish ports only on host loopback. The reference apps require authenticated external ingress. The incident app adds JWT-protected operations, signed replay-resistant intake, and migration-aware readiness.
+
+## Stateful API and worker pattern
+
+`incident-triage-agent` remains one app and one release artifact while exposing separate `api`, `worker`, and one-shot `migrate` roles. Postgres owns delivery idempotency, case state, evidence, leases, approval permits, audit, and certification records. Mastra owns workflow run state, suspension and resume, traces, datasets, experiment results, and scorer output. Stable identifiers link the stores; neither store duplicates the other's payloads.
+
+The migration job must finish before API and workers become ready. Workers use fenced leases and deterministic workflow run IDs, stop claiming new work after `SIGTERM`, and drain the current operation before exit. The image contains generated runtime output, production dependencies, and SQL migrations only; it runs as the non-root `node` user.
 
 ## Validation and affected-app CI
 
@@ -36,6 +42,6 @@ Selection is conservative and dependency-aware:
 
 The pnpm lockfile is one repository-wide file, but importer sections preserve narrow app dependency impact when the before and after graphs can be compared safely.
 
-## Intentionally deferred
+## Intentionally deferred for the reference apps
 
-This foundation does not define production prompts, tools, provider choice, live-model evaluations, authentication, storage, memory, queues, long-running recovery, inter-agent communication, gateways, orchestration, registry publishing, release automation, hosting manifests, Kubernetes, or multi-architecture images. A custom readiness route should be added only when an app gains a required startup dependency. A generator should be added only after repeated manual additions reveal real drift.
+The reference apps do not define production prompts, tools, authentication, storage, queues, or long-running recovery. The incident app supplies an app-local pattern for those requirements without turning them into premature shared infrastructure. Registry publishing, release automation, production actuation, hosting manifests, Kubernetes, and multi-architecture images remain deferred.

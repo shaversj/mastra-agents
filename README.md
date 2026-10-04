@@ -2,7 +2,7 @@
 
 A pnpm workspace for Mastra agents that build, validate, and deploy independently. Each directory under `apps/` is one deployment unit with its own manifest, runtime configuration, tests, generated server, and container image.
 
-The reference apps are `@mastra-agents/researcher-agent` and `@mastra-agents/writer-agent`.
+The reference apps are `@mastra-agents/researcher-agent` and `@mastra-agents/writer-agent`. `@mastra-agents/incident-triage-agent` is the stateful pattern, with independently deployable API and worker roles in one image.
 
 ## Prerequisites
 
@@ -25,9 +25,10 @@ Run only one app's checks with a fail-safe workspace filter:
 ```sh
 pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run check
 pnpm --filter @mastra-agents/writer-agent --fail-if-no-match run check
+pnpm --filter @mastra-agents/incident-triage-agent --fail-if-no-match run check
 ```
 
-All scaffold checks are model-free: they validate configuration, registration, `/health`, `/api/agents`, and graceful shutdown without sending a model request or requiring a provider credential.
+Default checks are model-free: they validate configuration, registration, operational endpoints, authorization boundaries, and graceful shutdown without sending a model request or requiring a provider credential. The incident app has separate real-Postgres, image, and opt-in live-certification tiers documented in its app README.
 
 ## Run an app locally
 
@@ -50,9 +51,10 @@ To build and smoke the app's non-root Linux image:
 pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run image:smoke
 ```
 
-The repository builds and smokes local images only. It does not publish images, create releases, or deploy infrastructure. The Mastra servers do not yet implement application authentication; never expose an image publicly without authenticated ingress in front of it.
+The repository builds and smokes local images only. It does not publish images, create releases, or deploy infrastructure. The reference servers do not yet implement application authentication; never expose them publicly without authenticated ingress. The incident app authenticates its own routes, but should still be deployed behind private, authenticated ingress.
 
 ## Project guides
 
 - [Architecture](docs/architecture.md) explains deployment boundaries, ownership, generated artifacts, and affected-app CI.
 - [Adding an agent](docs/adding-agent.md) is the checklist for creating another independent app.
+- [Incident triage agent](apps/incident-triage-agent/README.md) documents its stateful operating and safety contract.

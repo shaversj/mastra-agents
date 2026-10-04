@@ -1,0 +1,9 @@
+{
+  "source": "fixture",
+  "deliveryId": "dependency-outage-1",
+  "sourceIncidentId": "dependency-outage",
+  "redactedPayload": {
+    "service": "checkout-api",
+    "summary": "Checkout requests fail when the inventory dependency times out"
+  }
+}
