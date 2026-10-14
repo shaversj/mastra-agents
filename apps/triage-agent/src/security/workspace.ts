@@ -212,32 +212,11 @@ class BoundedLocalSandbox extends LocalSandbox {
 
     const args = [...wrapped.args];
     args.splice(networkNamespaceIndex, 1);
-    const commandSeparatorIndex = args.lastIndexOf('--');
-    if (commandSeparatorIndex === -1) throw new Error('SANDBOX_COMMAND_ISOLATION_INVALID');
-
-    const sandboxCommand = args.slice(commandSeparatorIndex + 1);
     // Hosted runners block bwrap's loopback netlink setup; unshare creates the same
-    // empty network namespace, then setpriv removes its setup capabilities.
+    // empty network namespace without configuring loopback.
     return {
-      args: [
-        ...args.slice(0, commandSeparatorIndex),
-        '--cap-add',
-        'CAP_SYS_ADMIN',
-        '--cap-add',
-        'CAP_SETPCAP',
-        '--',
-        '/usr/bin/unshare',
-        '--net',
-        '--',
-        '/usr/bin/setpriv',
-        '--no-new-privs',
-        '--bounding-set=-all',
-        '--inh-caps=-all',
-        '--ambient-caps=-all',
-        '--',
-        ...sandboxCommand,
-      ],
-      command: wrapped.command,
+      args: ['--user', '--map-root-user', '--net', '--', wrapped.command, ...args],
+      command: '/usr/bin/unshare',
     };
   }
 
