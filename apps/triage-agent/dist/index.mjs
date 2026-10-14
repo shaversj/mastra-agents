@@ -296546,14 +296546,15 @@ async function assertPreparedTreeCredentialFree(path5) {
 }
 function boundedCommand(command, args, limits) {
   const invocation = args.length ? `${shellQuote2(command)} ${args.map((argument) => shellQuote2(argument)).join(" ")}` : command;
-  return [
+  const boundedInvocation = [
     `ulimit -t ${limits.cpuSeconds}`,
     `ulimit -v ${limits.addressSpaceKiB}`,
     `ulimit -u ${limits.maxProcesses}`,
     `ulimit -n ${limits.maxOpenFiles}`,
     `ulimit -f ${limits.fileSizeBlocks}`,
-    `exec /bin/bash -c ${shellQuote2(invocation)}`
+    `exec ${invocation}`
   ].join("; ");
+  return `exec /bin/bash -c ${shellQuote2(boundedInvocation)}`;
 }
 var BoundedLocalSandbox = class extends LocalSandbox {
   commandEvidence = [];

@@ -171,14 +171,15 @@ function boundedCommand(command: string, args: string[], limits: CommandLimits):
   const invocation = args.length
     ? `${shellQuote(command)} ${args.map((argument) => shellQuote(argument)).join(' ')}`
     : command;
-  return [
+  const boundedInvocation = [
     `ulimit -t ${limits.cpuSeconds}`,
     `ulimit -v ${limits.addressSpaceKiB}`,
     `ulimit -u ${limits.maxProcesses}`,
     `ulimit -n ${limits.maxOpenFiles}`,
     `ulimit -f ${limits.fileSizeBlocks}`,
-    `exec /bin/bash -c ${shellQuote(invocation)}`,
+    `exec ${invocation}`,
   ].join('; ');
+  return `exec /bin/bash -c ${shellQuote(boundedInvocation)}`;
 }
 
 class BoundedLocalSandbox extends LocalSandbox {
