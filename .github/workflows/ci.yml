@@ -92,13 +92,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Install triage sandbox dependency
+      - name: Verify triage sandbox runtime
         if: matrix.app == 'triage-agent'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes bubblewrap util-linux
-          bwrap --version
-          unshare --version
+        run: docker version
 
       - name: Validate selected application
         env:

@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@mastra/core": "1.74.0",
+    "@mastra/docker": "0.10.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

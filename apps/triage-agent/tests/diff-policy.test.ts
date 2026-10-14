@@ -61,6 +61,20 @@ describe('change-set admission', () => {
     ).rejects.toThrow('DIFF_SYMLINK');
   });
 
+  it.each([
+    '-----BEGIN PRIVATE KEY-----',
+    '-----BEGIN ENCRYPTED PRIVATE KEY-----',
+    '-----BEGIN PGP PRIVATE KEY BLOCK-----',
+  ])('rejects private-key header %s', async (header) => {
+    const root = await workspace();
+    const baseline = await snapshotWorkspace(root);
+    await writeFile(join(root, 'leak.txt'), `${header}\nfixture\n`);
+
+    await expect(admitWorkspaceChanges({ baseline, workspaceRoot: root })).rejects.toThrow(
+      'DIFF_CREDENTIAL_CONTENT',
+    );
+  });
+
   it('enforces file-count, individual-file, and aggregate-diff ceilings', async () => {
     const root = await workspace();
     const baseline = await snapshotWorkspace(root);

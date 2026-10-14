@@ -139,6 +139,11 @@ export class GitHubRest implements GitHubMutationTransport {
     private readonly serverUrl = 'https://github.com',
   ) {}
 
+  async addLabels(issueNumber: number, labels: string[]): Promise<void> {
+    if (labels.length === 0) return;
+    await this.request('POST', `/issues/${issueNumber}/labels`, { labels });
+  }
+
   async request<T>(method: string, path: string, body?: unknown): Promise<GitHubResponse<T>> {
     const response = await fetch(`${this.apiUrl}/repos/${this.repository}${path}`, {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -362,6 +367,15 @@ export class GitHubRest implements GitHubMutationTransport {
       `/issues/${issueNumber}`,
     );
     return data.labels.map(({ name }) => name);
+  }
+
+  async removeLabel(issueNumber: number, label: string): Promise<void> {
+    try {
+      await this.request('DELETE', `/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'GITHUB_API_404') return;
+      throw error;
+    }
   }
 
   async setLabels(issueNumber: number, labels: string[]): Promise<void> {

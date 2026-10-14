@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import {
   chmod,
   cp,
@@ -14,18 +15,19 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 
 import {
   LocalFilesystem,
-  LocalSandbox,
   LocalSkillSource,
   Workspace,
   WORKSPACE_TOOLS,
   type CommandResult,
   type ExecuteCommandOptions,
-  type IsolationBackend,
   type LocalFilesystemOptions,
-  type LocalSandboxOptions,
-  type SandboxDetectionResult,
   type WorkspaceToolsConfig,
 } from '@mastra/core/workspace';
+import {
+  DockerSandbox,
+  type DockerSandboxOptions,
+  type DockerSandboxStartOptions,
+} from '@mastra/docker';
 
 import {
   assertCredentialFreeContent,
@@ -66,9 +68,14 @@ export const defaultCommandLimits: CommandLimits = {
   timeoutMs: 120_000,
 };
 
-export type SandboxFactoryOptions = LocalSandboxOptions & {
+export const triageSandboxImage =
+  'node:22.13.0-bookworm-slim@sha256:f5a0871ab03b035c58bdb3007c3d177b001c2145c18e81817b71624dcf7d8bff';
+
+export type SandboxFactoryOptions = DockerSandboxOptions & {
   commandLimits: CommandLimits;
   diffLimits: DiffLimits;
+  hostWorkspaceRoot: string;
+  sandboxUser: string;
 };
 
 export interface WorkspaceFactoryOptions {
@@ -107,6 +114,7 @@ export interface SandboxCommandEvidence {
 
 type SecureWorkspaceLifecycle = {
   destroy?: () => Promise<unknown>;
+  init?: () => Promise<unknown>;
   sandbox:
     | {
         executeCommand?: (
@@ -182,63 +190,50 @@ function boundedCommand(command: string, args: string[], limits: CommandLimits):
   return `exec /bin/bash -c ${shellQuote(boundedInvocation)}`;
 }
 
-class BoundedLocalSandbox extends LocalSandbox {
+class BoundedDockerSandbox extends DockerSandbox {
   private readonly commandEvidence: SandboxCommandEvidence[] = [];
   private commandCount = 0;
   private readonly commandLimits: CommandLimits;
   private readonly deadline: number;
   private readonly diffLimits: DiffLimits;
+  private readonly hostWorkspaceRoot: string;
+  private readonly sandboxUser: string;
 
   constructor(options: SandboxFactoryOptions) {
-    const { commandLimits, diffLimits, ...sandboxOptions } = options;
+    const { commandLimits, diffLimits, hostWorkspaceRoot, sandboxUser, ...sandboxOptions } =
+      options;
     super(sandboxOptions);
     this.commandLimits = commandLimits;
     this.diffLimits = diffLimits;
+    this.hostWorkspaceRoot = hostWorkspaceRoot;
+    this.sandboxUser = sandboxUser;
     this.deadline = Date.now() + commandLimits.maxElapsedMs;
+
+    // @mastra/docker does not yet expose Docker's Config.User. Keep the provider's
+    // lifecycle while injecting the host identity at the container boundary so a
+    // capability-free process can access the owner-only materialized workspace.
+    const docker = (
+      this as unknown as {
+        _docker: {
+          createContainer(options: Record<string, unknown>): Promise<unknown>;
+        };
+      }
+    )._docker;
+    const createContainer = docker.createContainer.bind(docker);
+    docker.createContainer = (containerOptions) =>
+      createContainer({ ...containerOptions, User: sandboxUser });
+  }
+
+  override async start(options: DockerSandboxStartOptions = {}): Promise<void> {
+    await super.start(options);
+    const info = await this.container.inspect();
+    if (info.Config?.User === this.sandboxUser) return;
+    await super.destroy().catch(() => undefined);
+    throw new Error('SANDBOX_USER_MISMATCH');
   }
 
   drainCommandEvidence(): SandboxCommandEvidence[] {
     return this.commandEvidence.splice(0);
-  }
-
-  override wrapCommandForIsolation(command: string): { args: string[]; command: string } {
-    const wrapped = super.wrapCommandForIsolation(command);
-    if (this.isolation !== 'bwrap') return wrapped;
-
-    const networkNamespaceIndex = wrapped.args.indexOf('--unshare-net');
-    if (wrapped.command !== 'bwrap' || networkNamespaceIndex === -1) {
-      throw new Error('SANDBOX_NETWORK_ISOLATION_INVALID');
-    }
-
-    const args = [...wrapped.args];
-    args.splice(networkNamespaceIndex, 1);
-    const commandSeparatorIndex = args.lastIndexOf('--');
-    if (commandSeparatorIndex === -1) throw new Error('SANDBOX_COMMAND_ISOLATION_INVALID');
-
-    const sandboxCommand = args.slice(commandSeparatorIndex + 1);
-    // Hosted runners block bwrap's loopback netlink setup; unshare creates the same
-    // empty network namespace, then setpriv removes its setup capabilities.
-    return {
-      args: [
-        ...args.slice(0, commandSeparatorIndex),
-        '--cap-add',
-        'CAP_SYS_ADMIN',
-        '--cap-add',
-        'CAP_SETPCAP',
-        '--',
-        '/usr/bin/unshare',
-        '--net',
-        '--',
-        '/usr/bin/setpriv',
-        '--no-new-privs',
-        '--bounding-set=-all',
-        '--inh-caps=-all',
-        '--ambient-caps=-all',
-        '--',
-        ...sandboxCommand,
-      ],
-      command: wrapped.command,
-    };
   }
 
   override async executeCommand(
@@ -288,7 +283,7 @@ class BoundedLocalSandbox extends LocalSandbox {
     let watchdogScan: Promise<void> | undefined;
     const scanWorkspace = () => {
       if (watchdogScan || resourceViolation) return;
-      watchdogScan = assertWorkspaceUsageCeilings(this.workingDirectory, this.diffLimits)
+      watchdogScan = assertWorkspaceUsageCeilings(this.hostWorkspaceRoot, this.diffLimits)
         .then(() => undefined)
         .catch(async (error: unknown) => {
           resourceViolation =
@@ -311,7 +306,7 @@ class BoundedLocalSandbox extends LocalSandbox {
       clearInterval(watchdog);
       await watchdogScan;
       if (resourceViolation) throw resourceViolation;
-      await assertWorkspaceUsageCeilings(this.workingDirectory, this.diffLimits);
+      await assertWorkspaceUsageCeilings(this.hostWorkspaceRoot, this.diffLimits);
       const redactedResult = { ...result };
       delete redactedResult.args;
       delete redactedResult.command;
@@ -328,27 +323,26 @@ class BoundedLocalSandbox extends LocalSandbox {
   }
 }
 
-export function resolveSandboxIsolation(
-  input: {
-    detectIsolation?: () => SandboxDetectionResult;
-    platform?: NodeJS.Platform;
-  } = {},
-): IsolationBackend {
-  const platform = input.platform ?? process.platform;
-  const detection = (input.detectIsolation ?? LocalSandbox.detectIsolation)();
-  if (platform === 'linux') {
-    if (!detection.available || detection.backend !== 'bwrap') {
-      throw new Error('SANDBOX_BWRAP_UNAVAILABLE');
-    }
-    return 'bwrap';
+function dockerDaemonAvailable(): Promise<boolean> {
+  return new Promise((resolveAvailability) => {
+    execFile(
+      'docker',
+      ['version', '--format', '{{.Server.Version}}'],
+      {
+        env: { PATH: trustedExecutableDirectories.join(':') },
+        timeout: 5_000,
+      },
+      (error) => resolveAvailability(!error),
+    );
+  });
+}
+
+export async function assertDockerSandboxAvailable(
+  input: { checkDocker?: () => boolean | Promise<boolean> } = {},
+): Promise<void> {
+  if (!(await (input.checkDocker ?? dockerDaemonAvailable)())) {
+    throw new Error('SANDBOX_DOCKER_UNAVAILABLE');
   }
-  if (platform === 'darwin') {
-    if (!detection.available || detection.backend !== 'seatbelt') {
-      throw new Error('SANDBOX_SEATBELT_UNAVAILABLE');
-    }
-    return 'seatbelt';
-  }
-  throw new Error('SANDBOX_PLATFORM_UNSUPPORTED');
 }
 
 function workspaceTools(): WorkspaceToolsConfig {
@@ -386,14 +380,21 @@ function workspaceTools(): WorkspaceToolsConfig {
   };
 }
 
+function hostSandboxUser(): string {
+  if (typeof process.getuid !== 'function' || typeof process.getgid !== 'function') {
+    throw new Error('SANDBOX_HOST_IDENTITY_UNAVAILABLE');
+  }
+  return `${process.getuid()}:${process.getgid()}`;
+}
+
 const defaultFactories: WorkspaceFactories<Workspace> = {
   createFilesystem: (options) => new LocalFilesystem(options),
-  createSandbox: (options) => new BoundedLocalSandbox(options),
+  createSandbox: (options) => new BoundedDockerSandbox(options),
   createSkillSource: (options) => new LocalSkillSource(options),
   createWorkspace: (options) =>
     new Workspace({
       filesystem: options.filesystem as LocalFilesystem,
-      sandbox: options.sandbox as LocalSandbox,
+      sandbox: options.sandbox as DockerSandbox,
       skillSource: options.skillSource as LocalSkillSource,
       skills: options.skills,
       tools: options.tools,
@@ -402,30 +403,14 @@ const defaultFactories: WorkspaceFactories<Workspace> = {
 
 export function createSecureWorkspace<TWorkspace = Workspace>(input: {
   commandLimits?: Partial<CommandLimits>;
-  detectIsolation?: () => SandboxDetectionResult;
   diffLimits?: Partial<DiffLimits>;
   factories?: WorkspaceFactories<TWorkspace>;
-  isolation?: IsolationBackend;
-  platform?: NodeJS.Platform;
   preparedReadOnlyPaths?: string[];
   triageSkillPath: string;
   workspaceRoot: string;
 }): TWorkspace {
   const commandLimits = { ...defaultCommandLimits, ...input.commandLimits };
   const diffLimits = { ...defaultDiffLimits, ...input.diffLimits };
-  const platform = input.platform ?? process.platform;
-  const isolation =
-    input.isolation ??
-    resolveSandboxIsolation({
-      ...(input.detectIsolation ? { detectIsolation: input.detectIsolation } : {}),
-      platform,
-    });
-  if (platform === 'linux' && isolation !== 'bwrap') throw new Error('SANDBOX_BWRAP_REQUIRED');
-  if (platform === 'darwin' && isolation !== 'seatbelt') {
-    throw new Error('SANDBOX_SEATBELT_REQUIRED');
-  }
-  if (isolation !== 'bwrap' && isolation !== 'seatbelt')
-    throw new Error('SANDBOX_ISOLATION_REQUIRED');
   if (!isAbsolute(input.workspaceRoot) || !isAbsolute(input.triageSkillPath)) {
     throw new Error('WORKSPACE_ABSOLUTE_PATH_REQUIRED');
   }
@@ -441,18 +426,54 @@ export function createSecureWorkspace<TWorkspace = Workspace>(input: {
     contained: true,
   });
   const sandbox = factories.createSandbox({
+    capDrop: ['ALL'],
     commandLimits,
     diffLimits,
-    env: secureGitEnvironment(),
-    isolation,
-    nativeSandbox: {
-      allowNetwork: false,
-      allowSystemBinaries: false,
-      readOnlyPaths: [...new Set([...trustedExecutableDirectories, ...preparedReadOnlyPaths])],
-      readWritePaths: [],
-    },
+    env: {
+      ...secureGitEnvironment(),
+      PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    } as Record<string, string>,
+    hostWorkspaceRoot: input.workspaceRoot,
+    image: triageSandboxImage,
+    memory: commandLimits.addressSpaceKiB * 1024,
+    memorySwap: commandLimits.addressSpaceKiB * 1024,
+    mounts: [
+      {
+        readOnly: false,
+        source: input.workspaceRoot,
+        target: '/workspace',
+        type: 'bind',
+      },
+      ...preparedReadOnlyPaths.map((path) => ({
+        readOnly: true,
+        source: path,
+        target: path,
+        type: 'bind' as const,
+      })),
+    ],
+    network: 'none',
+    pidsLimit: commandLimits.maxProcesses,
+    privileged: false,
+    readonlyRootfs: true,
+    sandboxUser: hostSandboxUser(),
+    securityOpt: ['no-new-privileges:true'],
     timeout: commandLimits.timeoutMs,
-    workingDirectory: input.workspaceRoot,
+    tmpfs: {
+      '/tmp': 'rw,noexec,nosuid,nodev,size=67108864',
+    },
+    ulimits: [
+      {
+        hard: commandLimits.maxOpenFiles,
+        name: 'nofile',
+        soft: commandLimits.maxOpenFiles,
+      },
+      {
+        hard: commandLimits.maxProcesses,
+        name: 'nproc',
+        soft: commandLimits.maxProcesses,
+      },
+    ],
+    workingDirectory: '/workspace',
   });
   const skillRoot = dirname(dirname(input.triageSkillPath));
   const skillSource = factories.createSkillSource({ basePath: skillRoot });
@@ -564,19 +585,13 @@ export async function createMaterializedWorkspace<
   commandLimits?: Partial<CommandLimits>;
   createSecureWorkspace?: (options: {
     commandLimits?: Partial<CommandLimits>;
-    detectIsolation?: () => SandboxDetectionResult;
     diffLimits?: Partial<DiffLimits>;
-    isolation: IsolationBackend;
-    platform: NodeJS.Platform;
     preparedReadOnlyPaths: string[];
     triageSkillPath: string;
     workspaceRoot: string;
   }) => TWorkspace;
   diffLimits?: Partial<DiffLimits>;
-  detectIsolation?: () => SandboxDetectionResult;
   environment?: Readonly<Record<string, string | undefined>>;
-  isolation?: IsolationBackend;
-  platform?: NodeJS.Platform;
   preparedPaths?: PreparedPath[];
   sourceFiles: string[];
   sourceRoot: string;
@@ -612,28 +627,15 @@ export async function createMaterializedWorkspace<
       materializationLimits,
     );
 
-    const platform = input.platform ?? process.platform;
-    const isolation =
-      input.isolation ??
-      resolveSandboxIsolation({
-        ...(input.detectIsolation ? { detectIsolation: input.detectIsolation } : {}),
-        platform,
-      });
-    if (platform === 'linux' && isolation !== 'bwrap') throw new Error('SANDBOX_BWRAP_REQUIRED');
-    if (platform === 'darwin' && isolation !== 'seatbelt') {
-      throw new Error('SANDBOX_SEATBELT_REQUIRED');
-    }
     const create = input.createSecureWorkspace ?? createSecureWorkspace;
     workspace = create({
       ...(input.commandLimits ? { commandLimits: input.commandLimits } : {}),
       ...(input.diffLimits ? { diffLimits: input.diffLimits } : {}),
-      ...(input.detectIsolation ? { detectIsolation: input.detectIsolation } : {}),
-      isolation,
-      platform,
       preparedReadOnlyPaths,
       triageSkillPath: input.triageSkillPath,
       workspaceRoot,
     }) as TWorkspace;
+    await workspace.init?.();
 
     if (input.buildCommand) {
       const executeCommand = workspace.sandbox?.executeCommand;

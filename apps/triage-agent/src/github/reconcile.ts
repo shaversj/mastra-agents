@@ -65,16 +65,25 @@ async function reconcileLifecycleLabel(input: {
   const current = [...(await input.api.readLabels(input.issueNumber))];
   const lifecycleValues = new Set(Object.values(input.labels));
   const currentLifecycle = current.filter((label) => lifecycleValues.has(label));
-  if (currentLifecycle.length > 1 && !input.allowLifecycleConflict) {
+  const target = input.labels[input.target];
+  if (
+    currentLifecycle.length > 1 &&
+    !currentLifecycle.includes(target) &&
+    !input.allowLifecycleConflict
+  ) {
     throw new Error('LIFECYCLE_LABEL_CONFLICT');
   }
-  const retained = current.filter((label) => !lifecycleValues.has(label));
-  const next = [
-    ...new Set([input.labels[input.target], ...retained, ...(input.ancillaryLabels ?? [])]),
-  ];
-  if (current.length === next.length && current.every((label, index) => label === next[index]))
-    return;
-  await input.api.setLabels(input.issueNumber, next);
+  const additions = [...new Set([target, ...(input.ancillaryLabels ?? [])])].filter(
+    (label) => !current.includes(label),
+  );
+  if (additions.length > 0) await input.api.addLabels(input.issueNumber, additions);
+
+  const refreshed = additions.length > 0 ? await input.api.readLabels(input.issueNumber) : current;
+  for (const label of refreshed) {
+    if (label !== target && lifecycleValues.has(label)) {
+      await input.api.removeLabel(input.issueNumber, label);
+    }
+  }
 }
 
 export async function reconcileLifecycleState(input: {

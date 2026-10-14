@@ -55,7 +55,7 @@ import {
 } from '../security/project-paths.js';
 import {
   createMaterializedWorkspace,
-  resolveSandboxIsolation,
+  assertDockerSandboxAvailable,
   type MaterializedWorkspace,
 } from '../security/workspace.js';
 
@@ -127,6 +127,7 @@ async function ensureEventMarker(input: {
   fencingToken: string;
   generation: number;
   kind: 'complete' | 'failure' | 'model_event';
+  proposal?: ProposalIdentity;
   state: LifecycleState;
 }): Promise<void> {
   const comments = await input.api.listComments(input.event.issue.number);
@@ -143,6 +144,7 @@ async function ensureEventMarker(input: {
       generation: input.generation,
       issueNumber: input.event.issue.number,
       kind: input.kind,
+      ...(input.proposal ? { proposal: input.proposal } : {}),
       repository: input.event.repository.fullName,
       state: input.state,
     }),
@@ -422,6 +424,7 @@ export function createLiveActionDependencies(input: {
         preparedDependencyPaths,
         repositoryLabels,
         checkoutSafe,
+        sandboxAvailable,
       ] = await Promise.all([
         repositoryRoot && inputs.triageSkill
           ? resolveProjectSkillFile(repositoryRoot, inputs.triageSkill)
@@ -440,6 +443,10 @@ export function createLiveActionDependencies(input: {
         repositoryRoot
           ? checkoutCredentialHygieneSafe(repositoryRoot, input.environment.GITHUB_SHA)
           : Promise.resolve(false),
+        assertDockerSandboxAvailable().then(
+          () => true,
+          () => false,
+        ),
       ]);
       if (preparedDependencyPaths.some((path) => !path)) {
         throw new Error('MODEL_ROUTE_PREPARED_DEPENDENCY_INVALID');
@@ -451,13 +458,6 @@ export function createLiveActionDependencies(input: {
         ...inputs.allowedPriorityLabels,
         inputs.prFixVerifiedLabel,
       ]);
-      let sandboxAvailable = false;
-      try {
-        resolveSandboxIsolation();
-        sandboxAvailable = true;
-      } catch {
-        sandboxAvailable = false;
-      }
       return {
         checkoutSafe,
         labelsPresent: [...requiredLabels].every((label) => availableLabels.has(label)),
@@ -518,7 +518,14 @@ export function createLiveActionDependencies(input: {
       const eventMarkers = markers.filter(
         ({ eventFingerprint }) => eventFingerprint === event.eventFingerprint,
       );
-      let proposal = markers.find((marker) => marker.proposal)?.proposal;
+      let proposal: ProposalIdentity | undefined;
+      for (let index = markers.length - 1; index >= 0; index -= 1) {
+        const candidate = markers[index]?.proposal;
+        if (candidate) {
+          proposal = candidate;
+          break;
+        }
+      }
       let recovery = recoveryRoute(eventMarkers);
       const modelMarker = eventMarkers.find(({ kind }) => kind === 'model_event');
       if (!proposal && modelMarker && input.environment.GITHUB_SHA) {
@@ -606,12 +613,14 @@ export function createLiveActionDependencies(input: {
       }
       await lease.assertCurrent();
       const api = new FencedGitHubMutationClient(writeApi, lease);
+      const proposal = states.get(event.eventFingerprint)?.proposal;
       await ensureEventMarker({
         api,
         event,
         fencingToken: lease.fencingToken,
         generation: route.generation,
         kind: 'failure',
+        ...(proposal ? { proposal } : {}),
         state: 'failed',
       });
       await reconcileLifecycleState({
@@ -781,6 +790,7 @@ export function createLiveActionDependencies(input: {
               repository: event.repository.fullName,
               sourceRepositoryRoot,
             });
+            state.proposal = proposal;
             const previewCommand = input.inputs.previewCommand;
             const previewLaunchUrl = input.inputs.previewLaunchUrl;
             const previewToken = input.inputs.previewToken;

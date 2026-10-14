@@ -38,8 +38,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install the Linux sandbox
-        run: sudo apt-get update && sudo apt-get install --yes bubblewrap util-linux
+      - name: Verify the Docker sandbox runtime
+        run: docker version
 
       - name: Run Mastra triage
         uses: shaversj/mastra-agents/apps/triage-agent@66309dfb2c0d6eabd65e542d753172e293f2edad
@@ -69,7 +69,9 @@ Create all ten lifecycle labels before enabling the Action. Their defaults are:
 
 The Action also expects a project-owned triage skill at the directory given by `triage-skill`; that directory must contain a regular, non-symlinked `SKILL.md`. Put repository-specific reproduce, test, scope, and validation instructions there. If `auto-pr-on-fix` is enabled, or maintainers will confirm proposals, configure `pr-skill` when custom PR-writing guidance is required.
 
-Only Git-tracked files are copied into the writable model workspace. Repositories that need additional offline dependencies can prepare bounded, credential-free, symlink-free trees before this Action and list their repository-relative paths in `prepared-dependency-paths`. Those trees are copied to a read-only sandbox mount, count against the 256 MiB workspace ceiling, and are rejected if missing or escaping the checkout. The Action never installs dependencies or enables network access inside the sandbox. An optional `build-command` runs there before the model; its output becomes the baseline and is not proposed as a fix.
+Only Git-tracked files are copied into the writable model workspace. Repositories that need additional offline dependencies can prepare bounded, credential-free, symlink-free trees before this Action and list their repository-relative paths in `prepared-dependency-paths`. Those trees are copied to read-only Docker bind mounts, count against the 256 MiB workspace ceiling, and are rejected if missing or escaping the checkout. The Action never installs dependencies or enables network access inside the sandbox. An optional `build-command` runs there before the model; its output becomes the baseline and is not proposed as a fix.
+
+Model commands run through Mastra's `DockerSandbox` using a digest-pinned `node:22.13.0-bookworm-slim` image. The container has no network, no Linux capabilities, no privilege escalation, a read-only root filesystem, bounded memory and process counts, and writable access only to the materialized workspace and temporary filesystem. The runner must provide a reachable Docker Engine; GitHub-hosted Ubuntu runners do so by default.
 
 ## Activation and retry behavior
 
@@ -151,7 +153,7 @@ Move `triage-agent-v1` only after the app check, fixture evals, Node 24 artifact
 - Mastra owns one coding agent, two event-scoped workflows, and one deterministic scorer under stable IDs.
 - The first release is public-repository-only and adds an optional trusted-activation mode.
 - GitHub comments, labels, pull requests, and action-owned Git refs are the only durable cross-run state; there is no database or Mastra memory.
-- Reproduction and editing run in a credential-free, offline native sandbox with bounded tools and final diff admission.
+- Reproduction and editing run in a credential-free, offline Mastra Docker sandbox with bounded tools and final diff admission.
 - Preview inspection is generic rather than Astro-specific; optional network publication is delegated to an explicitly configured metadata-only launcher with a preview-scoped credential.
 - The default publication token is intentionally non-recursive; elevated publication requires an explicit downstream-CI safety declaration.
 - Pull-request-close cleanup is not automatic in v1. Issue-close cleanup remains conservative and never deletes a branch backing an open pull request.

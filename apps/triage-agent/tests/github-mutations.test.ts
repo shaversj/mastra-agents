@@ -40,6 +40,11 @@ class FakeGitHub implements GitHubMutationTransport {
     title: string;
   }> = [];
 
+  async addLabels(_issue: number, labels: string[]) {
+    this.labels = [...new Set([...this.labels, ...labels])];
+    this.mutate('addLabels');
+  }
+
   private mutate(name: string) {
     this.calls.push(name);
     if (this.failAfter === this.calls.length) throw new Error(`CRASH_AFTER_${name}`);
@@ -81,6 +86,10 @@ class FakeGitHub implements GitHubMutationTransport {
   }
   async readLabels() {
     return this.labels;
+  }
+  async removeLabel(_issue: number, label: string) {
+    this.labels = this.labels.filter((value) => value !== label);
+    this.mutate('removeLabel');
   }
   async setLabels(_issue: number, labels: string[]) {
     this.labels = [...labels];
@@ -205,7 +214,7 @@ describe('fenced GitHub reconciliation', () => {
     expect(fake.comments).toHaveLength(1);
     expect(fake.comments[0]?.body).toContain(`${proposal.branch}@${proposal.headSha}`);
     expect(fake.comments[0]?.body).toContain('A verified fix is ready');
-    expect(lease.assertCurrent).toHaveBeenCalledTimes(2);
+    expect(lease.assertCurrent).toHaveBeenCalledTimes(3);
   });
 
   it('discloses automatic PR confirmation bypass without confirm or reject instructions', async () => {
@@ -251,7 +260,29 @@ describe('fenced GitHub reconciliation', () => {
       target: 'failed',
     });
 
-    expect(fake.labels).toEqual([defaultLifecycleLabels.failed, 'customer-reported']);
+    expect(fake.labels).toHaveLength(2);
+    expect(fake.labels).toEqual(
+      expect.arrayContaining([defaultLifecycleLabels.failed, 'customer-reported']),
+    );
+  });
+
+  it('preserves an unrelated label added concurrently during a lifecycle transition', async () => {
+    const fake = new FakeGitHub();
+    const originalAddLabels = fake.addLabels.bind(fake);
+    fake.addLabels = async (issueNumber, labels) => {
+      await originalAddLabels(issueNumber, labels);
+      fake.labels.push('maintainer-added');
+    };
+    const { api } = client(fake);
+
+    await reconcileLifecycleState({
+      api,
+      issueNumber: 42,
+      labels: defaultLifecycleLabels,
+      target: 'needs_reproduction',
+    });
+
+    expect(fake.labels).toEqual([defaultLifecycleLabels.needs_reproduction, 'maintainer-added']);
   });
 
   it('adopts an existing matching PR and repairs state without duplication', async () => {

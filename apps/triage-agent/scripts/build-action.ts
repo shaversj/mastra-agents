@@ -11,11 +11,13 @@ const outputFile = `${outputDirectory}/index.mjs`;
 await mkdir(outputDirectory, { recursive: true });
 await build({
   banner: {
-    js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
+    js: "import { createRequire as __createRequire } from 'node:module'; import { dirname as __pathDirname } from 'node:path'; import { fileURLToPath as __fileURLToPath } from 'node:url'; const require = __createRequire(import.meta.url); const __filename = __fileURLToPath(import.meta.url); const __dirname = __pathDirname(__filename);",
   },
   bundle: true,
   charset: 'utf8',
   entryPoints: [entryPoint],
+  // Dockerode's SSH transport treats cpu-features as optional and falls back when absent.
+  external: ['cpu-features'],
   format: 'esm',
   legalComments: 'none',
   logLevel: 'info',

@@ -57,7 +57,9 @@ const prohibitedControlFiles = new Set([
   '.yarnrc.yml',
 ]);
 const credentialPatterns = [
-  /-----BEGIN (?:OPENSSH|RSA|EC|DSA|PGP) PRIVATE KEY-----/u,
+  /-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----/u,
+  /-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----/u,
+  /-----BEGIN PGP PRIVATE KEY BLOCK-----/u,
   /\bAKIA[0-9A-Z]{16}\b/u,
   /\bgh[opusr]_[A-Za-z0-9]{30,}\b/u,
   /\bgithub_pat_[A-Za-z0-9_]{30,}\b/u,

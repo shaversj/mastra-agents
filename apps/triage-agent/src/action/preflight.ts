@@ -79,7 +79,7 @@ export function preflightAction(
       throw new Error('Configured PR skill is unavailable');
     }
     if (context.sandboxAvailable === false) {
-      throw new Error('Required Linux sandbox is unavailable');
+      throw new Error('Required Docker sandbox is unavailable');
     }
     if (context.checkoutSafe === false) {
       throw new Error('Checkout credential hygiene validation failed');

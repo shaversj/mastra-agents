@@ -605,6 +605,68 @@ describe('Action controller', () => {
     }
   });
 
+  it('uses the newest persisted proposal after rejection and retriage', async () => {
+    const inputs = modelInputs();
+    const event = projectGitHubEvent('issues', opened, 'delivery-latest-proposal');
+    const oldProposal = proposalIdentity({
+      baseSha: 'a'.repeat(40),
+      branch: `triagebot/fix-${event.issue.number}`,
+      headSha: 'b'.repeat(40),
+    });
+    const latestProposal = proposalIdentity({
+      baseSha: 'c'.repeat(40),
+      branch: `triagebot/fix-${event.issue.number}`,
+      headSha: 'd'.repeat(40),
+    });
+    const comments = [oldProposal, latestProposal].map((proposal, index) => ({
+      body: encodeMarker({
+        eventFingerprint: `earlier-event-${index}`,
+        fencingToken: `fence-${index}`,
+        generation: index + 1,
+        issueNumber: event.issue.number,
+        kind: 'proposal' as const,
+        proposal,
+        repository: event.repository.fullName,
+        state: 'fix_pending' as const,
+      }),
+      id: index + 1,
+      user: { login: 'github-actions[bot]' },
+    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (value: string | URL | Request) => {
+        const url = String(value);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'github-actions[bot]' }), { status: 200 });
+        }
+        if (url.includes('/comments?')) {
+          return new Response(JSON.stringify(comments), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        if (url.includes('/git/ref/heads/')) {
+          return new Response(JSON.stringify({ object: { sha: latestProposal.headSha } }), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    try {
+      const live = createLiveActionDependencies({
+        environment: { GITHUB_REPOSITORY: event.repository.fullName },
+        inputs,
+      });
+      await expect(live.readRoutingState(event)).resolves.toMatchObject({
+        branchProvenanceVerified: true,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('adopts an exact action-owned PR and repairs both issue and PR labels', async () => {
     const inputs = parseActionInputs({
       INPUT_ANTHROPIC_API_KEY: 'provider-canary',
@@ -681,6 +743,28 @@ describe('Action controller', () => {
           return new Response(JSON.stringify({ object: { sha: proposal.headSha } }), {
             headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
             status: 200,
+          });
+        }
+        const labelPath = /\/issues\/(\d+)\/labels(?:\/(.+))?$/u.exec(new URL(url).pathname);
+        if (labelPath?.[1] && method === 'POST') {
+          const issueNumber = Number(labelPath[1]);
+          const added = JSON.parse(String(init?.body)).labels as string[];
+          labels.set(issueNumber, [...new Set([...(labels.get(issueNumber) ?? []), ...added])]);
+          return new Response(JSON.stringify([]), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        if (labelPath?.[1] && labelPath[2] && method === 'DELETE') {
+          const issueNumber = Number(labelPath[1]);
+          const removed = decodeURIComponent(labelPath[2]);
+          labels.set(
+            issueNumber,
+            (labels.get(issueNumber) ?? []).filter((label) => label !== removed),
+          );
+          return new Response(undefined, {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 204,
           });
         }
         const issueMatch = /\/issues\/(\d+)(?:\/labels)?$/u.exec(new URL(url).pathname);
@@ -849,7 +933,27 @@ describe('Action controller', () => {
       INPUT_WRITE_TOKEN: 'same-token',
     });
     const event = projectGitHubEvent('issues', opened, 'delivery-model-failure');
-    const comments: Array<{ body: string; id: number; user: { login: string } }> = [];
+    const proposal = proposalIdentity({
+      baseSha: 'a'.repeat(40),
+      branch: `triagebot/fix-${event.issue.number}`,
+      headSha: 'b'.repeat(40),
+    });
+    const comments: Array<{ body: string; id: number; user: { login: string } }> = [
+      {
+        body: encodeMarker({
+          eventFingerprint: 'earlier-proposal-event',
+          fencingToken: 'earlier-fence',
+          generation: 1,
+          issueNumber: event.issue.number,
+          kind: 'proposal',
+          proposal,
+          repository: event.repository.fullName,
+          state: 'fix_pending',
+        }),
+        id: 1,
+        user: { login: 'github-actions[bot]' },
+      },
+    ];
     let labels = [
       'customer-reported',
       defaultLifecycleLabels.needs_triage,
@@ -882,6 +986,12 @@ describe('Action controller', () => {
             status: 200,
           });
         }
+        if (url.includes('/git/ref/heads/')) {
+          return new Response(JSON.stringify({ object: { sha: proposal.headSha } }), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
         if (url.endsWith(`/issues/${event.issue.number}`) && method === 'GET') {
           return new Response(JSON.stringify({ labels: labels.map((name) => ({ name })) }), {
             headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
@@ -893,6 +1003,25 @@ describe('Action controller', () => {
           return new Response(JSON.stringify(labels.map((name) => ({ name }))), {
             headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
             status: 200,
+          });
+        }
+        if (url.endsWith(`/issues/${event.issue.number}/labels`) && method === 'POST') {
+          const added = (JSON.parse(String(init?.body)) as { labels: string[] }).labels;
+          labels = [...new Set([...labels, ...added])];
+          return new Response(JSON.stringify(labels.map((name) => ({ name }))), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        const removedLabel = new URL(url).pathname.match(
+          new RegExp(`/issues/${event.issue.number}/labels/(.+)$`, 'u'),
+        )?.[1];
+        if (removedLabel && method === 'DELETE') {
+          const decoded = decodeURIComponent(removedLabel);
+          labels = labels.filter((label) => label !== decoded);
+          return new Response(undefined, {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 204,
           });
         }
         throw new Error(`Unexpected request: ${method} ${url}`);
@@ -924,10 +1053,13 @@ describe('Action controller', () => {
       await live.reconcileFailure(failure);
       await live.reconcileFailure(failure);
 
-      expect(labels).toEqual([defaultLifecycleLabels.failed, 'customer-reported']);
-      expect(
-        comments.map(({ body }) => decodeMarker(body, { authorIsAction: true })?.kind),
-      ).toEqual(['failure', 'complete']);
+      expect(labels).toHaveLength(2);
+      expect(labels).toEqual(
+        expect.arrayContaining([defaultLifecycleLabels.failed, 'customer-reported']),
+      );
+      const decoded = comments.map(({ body }) => decodeMarker(body, { authorIsAction: true }));
+      expect(decoded.map((marker) => marker?.kind)).toEqual(['proposal', 'failure', 'complete']);
+      expect(decoded.find((marker) => marker?.kind === 'failure')?.proposal).toEqual(proposal);
       expect(lease.assertCurrent).toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
@@ -1189,7 +1321,7 @@ describe('Action controller', () => {
     });
 
     await expect(runTriageAction(request(), setup.value)).rejects.toThrowError(
-      'Required Linux sandbox is unavailable',
+      'Required Docker sandbox is unavailable',
     );
 
     expect(setup.value.acquireLease).not.toHaveBeenCalled();

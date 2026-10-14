@@ -18,6 +18,7 @@ export interface GitHubPullRequest {
 }
 
 export interface GitHubMutationTransport {
+  addLabels(issueNumber: number, labels: string[]): Promise<void>;
   createComment(issueNumber: number, body: string): Promise<GitHubActionComment>;
   createPullRequest(input: {
     base: string;
@@ -31,6 +32,7 @@ export interface GitHubMutationTransport {
   listComments(issueNumber: number): Promise<readonly GitHubActionComment[]>;
   listPullRequests(input: { base?: string; head: string }): Promise<readonly GitHubPullRequest[]>;
   readLabels(issueNumber: number): Promise<readonly string[]>;
+  removeLabel(issueNumber: number, label: string): Promise<void>;
   setLabels(issueNumber: number, labels: string[]): Promise<void>;
 }
 
@@ -39,6 +41,10 @@ export class FencedGitHubMutationClient {
     private readonly transport: GitHubMutationTransport,
     private readonly lease: LeaseGuard,
   ) {}
+
+  addLabels(issueNumber: number, labels: string[]): Promise<void> {
+    return this.mutate(() => this.transport.addLabels(issueNumber, labels));
+  }
 
   createComment(issueNumber: number, body: string): Promise<GitHubActionComment> {
     return this.mutate(() => this.transport.createComment(issueNumber, body));
@@ -72,6 +78,10 @@ export class FencedGitHubMutationClient {
 
   readLabels(issueNumber: number): Promise<readonly string[]> {
     return this.transport.readLabels(issueNumber);
+  }
+
+  removeLabel(issueNumber: number, label: string): Promise<void> {
+    return this.mutate(() => this.transport.removeLabel(issueNumber, label));
   }
 
   setLabels(issueNumber: number, labels: string[]): Promise<void> {
