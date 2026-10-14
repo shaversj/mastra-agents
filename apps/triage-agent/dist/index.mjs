@@ -296581,9 +296581,29 @@ var BoundedLocalSandbox = class extends LocalSandbox {
     }
     const args = [...wrapped.args];
     args.splice(networkNamespaceIndex, 1);
+    const commandSeparatorIndex = args.lastIndexOf("--");
+    if (commandSeparatorIndex === -1) throw new Error("SANDBOX_COMMAND_ISOLATION_INVALID");
+    const sandboxCommand = args.slice(commandSeparatorIndex + 1);
     return {
-      args: ["--user", "--map-root-user", "--net", "--", wrapped.command, ...args],
-      command: "/usr/bin/unshare"
+      args: [
+        ...args.slice(0, commandSeparatorIndex),
+        "--cap-add",
+        "CAP_SYS_ADMIN",
+        "--cap-add",
+        "CAP_SETPCAP",
+        "--",
+        "/usr/bin/unshare",
+        "--net",
+        "--",
+        "/usr/bin/setpriv",
+        "--no-new-privs",
+        "--bounding-set=-all",
+        "--inh-caps=-all",
+        "--ambient-caps=-all",
+        "--",
+        ...sandboxCommand
+      ],
+      command: wrapped.command
     };
   }
   async executeCommand(command, args = [], options2 = {}) {
