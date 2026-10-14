@@ -25,6 +25,7 @@
     "test:server": "tsx scripts/smoke-generated-server.ts",
     "image:build": "docker build --file Dockerfile --tag mastra-agents/incident-triage-agent:local ../..",
     "image:smoke": "pnpm image:build && tsx scripts/smoke-image.ts",
+    "artifact:smoke": "pnpm image:smoke",
     "check": "MODEL_ID=openai/gpt-4o-mini DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:1/incident_triage INCIDENT_HMAC_SECRET=development-secret-at-least-32-characters JWT_ISSUER=https://identity.example.com/ JWT_AUDIENCE=incident-triage-agent JWT_JWKS_URL=https://identity.example.com/.well-known/jwks.json pnpm run check:configured",
     "check:configured": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm config:check && pnpm test && pnpm build && pnpm preflight:built && pnpm test:server"
   },

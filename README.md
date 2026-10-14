@@ -1,6 +1,6 @@
 # Mastra Agents
 
-A pnpm workspace for Mastra agents that build, validate, and deploy independently. Each directory under `apps/` is one deployment unit with its own manifest, runtime configuration, tests, generated server, and container image.
+A pnpm workspace for Mastra agents that build, validate, and deploy independently. Each directory under `apps/` is one deployment unit with its own manifest, runtime configuration, tests, and primary deployable artifact.
 
 The reference apps are `@mastra-agents/researcher-agent` and `@mastra-agents/writer-agent`. `@mastra-agents/incident-triage-agent` is the stateful pattern, with independently deployable API and worker roles in one image.
 
@@ -18,7 +18,7 @@ pnpm check:repo
 pnpm check
 ```
 
-`check:repo` validates root formatting, linting, types, package boundaries, smoke helpers, and CI selection without building every app. `check` runs that gate and then each app's complete check, including its generated-server smoke test.
+`check:repo` validates root formatting, linting, types, package boundaries, deployable-artifact contracts, smoke helpers, and CI selection without building every app. `check` runs that gate and then each app's complete check.
 
 Run only one app's checks with a fail-safe workspace filter:
 
@@ -45,13 +45,13 @@ pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run build
 pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run test:server
 ```
 
-To build and smoke the app's non-root Linux image:
+To smoke an app's primary production artifact:
 
 ```sh
-pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run image:smoke
+pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run artifact:smoke
 ```
 
-The repository builds and smokes local images only. It does not publish images, create releases, or deploy infrastructure. The reference servers do not yet implement application authentication; never expose them publicly without authenticated ingress. The incident app authenticates its own routes, but should still be deployed behind private, authenticated ingress.
+The repository builds and smokes local production artifacts only. It does not publish artifacts, create releases, or deploy infrastructure. The reference servers do not yet implement application authentication; never expose them publicly without authenticated ingress. The incident app authenticates its own routes, but should still be deployed behind private, authenticated ingress.
 
 ## Project guides
 

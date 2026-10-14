@@ -92,12 +92,25 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install triage sandbox dependency
+        if: matrix.app == 'triage-agent'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          bwrap --version
+
       - name: Validate selected application
         env:
           PACKAGE_NAME: ${{ matrix.packageName }}
         run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run check
 
-      - name: Smoke selected application image
+      - name: Install Node.js for triage Action smoke
+        if: matrix.app == 'triage-agent'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - name: Smoke selected application artifact
         env:
           PACKAGE_NAME: ${{ matrix.packageName }}
-        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run image:smoke
+        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run artifact:smoke
