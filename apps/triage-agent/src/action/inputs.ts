@@ -42,6 +42,8 @@ export interface ActionInputs {
   preparedDependencyPaths: string[];
   previewAllowedHosts: string[];
   previewCommand?: string;
+  previewLaunchUrl?: string;
+  previewToken?: string;
   prFixVerifiedLabel: string;
   prSkill?: string;
   prSkillName: string;
@@ -205,6 +207,35 @@ export function parseActionInputs(environment: Environment = process.env): Actio
   const extraBotLogins = csvInput(environment, 'bot-logins');
   const buildCommand = optionalInput(environment, 'build-command');
   const previewCommand = optionalInput(environment, 'preview-command');
+  const previewAllowedHosts = previewHosts(environment);
+  const previewLaunchUrl = optionalInput(environment, 'preview-launch-url');
+  const previewToken = optionalInput(environment, 'preview-token');
+  if (Boolean(previewLaunchUrl) !== Boolean(previewToken)) {
+    throw new Error('Invalid preview launcher configuration');
+  }
+  if (previewLaunchUrl && previewToken) {
+    let url: URL;
+    try {
+      url = new URL(previewLaunchUrl);
+    } catch {
+      throw new Error('Invalid Action input: preview-launch-url');
+    }
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.hash ||
+      previewLaunchUrl.length > 2_048 ||
+      !previewAllowedHosts.includes(url.hostname)
+    ) {
+      throw new Error('Invalid Action input: preview-launch-url');
+    }
+    if (!previewCommand) throw new Error('Invalid preview launcher configuration');
+    if (previewToken.length > 4_096 || /[\r\n\0]/u.test(previewToken)) {
+      throw new Error('Invalid Action input: preview-token');
+    }
+  }
   const prSkill = optionalInput(environment, 'pr-skill');
   const triageSkill = optionalInput(environment, 'triage-skill');
 
@@ -228,8 +259,10 @@ export function parseActionInputs(environment: Environment = process.env): Actio
     maxModelEvents: integerInput(environment, 'max-model-events', 4, 1, 20),
     ...(openaiApiKey ? { openaiApiKey } : {}),
     preparedDependencyPaths: csvInput(environment, 'prepared-dependency-paths'),
-    previewAllowedHosts: previewHosts(environment),
+    previewAllowedHosts,
     ...(previewCommand ? { previewCommand } : {}),
+    ...(previewLaunchUrl ? { previewLaunchUrl } : {}),
+    ...(previewToken ? { previewToken } : {}),
     prFixVerifiedLabel: getInput(environment, 'pr-label-fix-verified') || 'fix verified',
     ...(prSkill ? { prSkill } : {}),
     prSkillName: getInput(environment, 'pr-skill-name') || 'pr-writer',

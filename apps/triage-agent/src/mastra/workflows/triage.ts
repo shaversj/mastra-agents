@@ -82,6 +82,13 @@ export const triageWorkflowInputSchema = z
         fullName: z.string().regex(/^[^/\s]+\/[^/\s]+$/u),
       })
       .strict(),
+    triggeringComment: z
+      .object({
+        body: z.string().max(65_536),
+        id: z.number().int().positive(),
+      })
+      .strict()
+      .optional(),
     totalRunMs: z
       .number()
       .int()
@@ -364,6 +371,9 @@ async function invokeParsed<T extends z.ZodType>(input: {
       evidence: input.state.evidence,
       issue: input.state.input.issue,
       repository: input.state.input.repository,
+      ...(input.state.input.triggeringComment
+        ? { triggeringComment: input.state.input.triggeringComment }
+        : {}),
     },
     phase: input.phase,
     schema: input.schema,
@@ -611,8 +621,8 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
     .then(prepareContext)
     .then(stage('reproduce', reproduceDecisionSchema))
     .then(stage('diagnose', investigationDecisionSchema))
-    .then(stage('verify', investigationDecisionSchema))
     .then(stage('fix', fixDecisionSchema))
+    .then(stage('verify', investigationDecisionSchema))
     .then(draftOutcomeReport)
     .then(classifyOutcome)
     .then(admitProposal)

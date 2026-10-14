@@ -170,9 +170,11 @@ describe('sandbox isolation and tool boundary', () => {
   });
 
   it.runIf(process.platform === 'linux')(
-    'starts the production bwrap sandbox with a sanitized process environment',
+    'enforces the production bwrap environment, network, and host-write boundary',
     async () => {
       const workspaceRoot = await mkdtemp(join(tmpdir(), 'triage-bwrap-'));
+      const outsideRoot = await mkdtemp(join(tmpdir(), 'triage-bwrap-outside-'));
+      const outsideMarker = join(outsideRoot, 'marker.txt');
       const workspace = createSecureWorkspace({
         isolation: 'bwrap',
         triageSkillPath: join(fixtureRoot, 'triage-skill', 'SKILL.md'),
@@ -180,6 +182,9 @@ describe('sandbox isolation and tool boundary', () => {
       }) as Workspace;
       cleanups.push(async () => {
         await workspace.destroy();
+      });
+      cleanups.push(async () => {
+        await rm(outsideRoot, { force: true, recursive: true });
       });
 
       await workspace.init();
@@ -192,6 +197,42 @@ describe('sandbox isolation and tool boundary', () => {
         'test -z "$GITHUB_TOKEN" && test -z "$OPENAI_API_KEY" && test ! -e .git',
       );
       expect(result?.success).toBe(true);
+
+      const deniedEgress = await sandbox.executeCommand(
+        'node',
+        [
+          '-e',
+          [
+            "const net = require('node:net');",
+            "const socket = net.connect({ host: '1.1.1.1', port: 443 });",
+            "socket.once('connect', () => { console.error('EGRESS_ALLOWED'); process.exit(9); });",
+            "socket.once('error', () => { console.log('EGRESS_DENIED'); process.exit(0); });",
+            "setTimeout(() => { console.error('EGRESS_TIMEOUT'); process.exit(8); }, 2_000);",
+          ].join(' '),
+        ],
+        { timeout: 5_000 },
+      );
+      expect(deniedEgress?.success).toBe(true);
+      expect(deniedEgress?.stdout).toContain('EGRESS_DENIED');
+
+      const deniedHostWrite = await sandbox.executeCommand(
+        'node',
+        [
+          '-e',
+          [
+            "const fs = require('node:fs');",
+            "try { fs.writeFileSync(process.argv[1], 'owned');",
+            "console.error('HOST_WRITE_ALLOWED'); process.exit(9); }",
+            "catch { console.log('HOST_WRITE_DENIED'); process.exit(0); }",
+          ].join(' '),
+          outsideMarker,
+        ],
+        { timeout: 5_000 },
+      );
+      expect(deniedHostWrite?.success).toBe(true);
+      expect(deniedHostWrite?.stdout).toContain('HOST_WRITE_DENIED');
+      await expect(stat(outsideMarker)).rejects.toThrow();
+
       await expect(sandbox.executeCommand('yes', [], { timeout: 5000 })).rejects.toThrow(
         'WORKSPACE_OUTPUT_LIMIT',
       );

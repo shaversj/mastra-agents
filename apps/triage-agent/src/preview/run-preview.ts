@@ -29,6 +29,45 @@ const launcherResultSchema = z
   })
   .strict();
 const inspectionResultSchema = z.object({ artifactId: z.string().min(1).max(200) }).strict();
+const launcherRequestSchema = z
+  .object({
+    artifactId: z.string().min(1).max(200),
+    metadata: z
+      .object({
+        branch: z.string().min(1).max(255),
+        repository: z
+          .string()
+          .min(3)
+          .max(200)
+          .regex(/^[^/\s]+\/[^/\s]+$/u),
+        sha: z.string().regex(/^[0-9a-f]{40}$/u),
+      })
+      .strict(),
+  })
+  .strict();
+const maximumLauncherResponseBytes = 8_192;
+
+async function readBoundedResponseBody(response: Response): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      totalBytes += chunk.value.byteLength;
+      if (totalBytes > maximumLauncherResponseBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error('PREVIEW_RESULT_INVALID');
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes).toString('utf8');
+}
 
 export function parsePreviewInspectionOutput(output: string): { artifactId: string } {
   if (Buffer.byteLength(output) > 8_192) throw new Error('PREVIEW_INSPECTION_INVALID');
@@ -52,6 +91,67 @@ function validateCredentials(credentials: Readonly<Record<string, string>>): voi
       throw new Error('PREVIEW_CREDENTIALS_INVALID');
     }
   }
+}
+
+export function createHttpPreviewLauncher(input: {
+  allowedHosts: readonly string[];
+  endpoint: string;
+  fetch?: typeof fetch;
+}): NonNullable<Parameters<typeof runPreview>[0]['launch']> {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(input.endpoint);
+  } catch {
+    throw new Error('PREVIEW_CONFIGURATION_INVALID');
+  }
+  if (
+    endpoint.protocol !== 'https:' ||
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.port ||
+    endpoint.hash ||
+    !input.allowedHosts.includes(endpoint.hostname)
+  ) {
+    throw new Error('PREVIEW_CONFIGURATION_INVALID');
+  }
+  const request = input.fetch ?? fetch;
+  return async ({ artifactId, credentials, metadata }) => {
+    if (
+      Object.keys(credentials).length !== 1 ||
+      !credentials.PREVIEW_TOKEN ||
+      /[\r\n\0]/u.test(credentials.PREVIEW_TOKEN)
+    ) {
+      throw new Error('PREVIEW_CREDENTIALS_INVALID');
+    }
+    const payload = launcherRequestSchema.safeParse({ artifactId, metadata });
+    if (!payload.success) throw new Error('PREVIEW_CONFIGURATION_INVALID');
+    const response = await request(endpoint, {
+      body: JSON.stringify(payload.data),
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${credentials.PREVIEW_TOKEN}`,
+        'Content-Type': 'application/json',
+        'User-Agent': 'mastra-triage-agent-preview',
+      },
+      method: 'POST',
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error('PREVIEW_LAUNCH_FAILED');
+    if (!/^application\/json(?:;|$)/iu.test(response.headers.get('content-type') ?? '')) {
+      throw new Error('PREVIEW_RESULT_INVALID');
+    }
+    const advertisedBytes = Number(response.headers.get('content-length'));
+    if (Number.isFinite(advertisedBytes) && advertisedBytes > maximumLauncherResponseBytes) {
+      throw new Error('PREVIEW_RESULT_INVALID');
+    }
+    const text = await readBoundedResponseBody(response);
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new Error('PREVIEW_RESULT_INVALID');
+    }
+  };
 }
 
 export async function runPreview(input: {

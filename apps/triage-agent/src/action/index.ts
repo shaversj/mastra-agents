@@ -26,6 +26,8 @@ const secretInputNames = [
   'INPUT_CLOUDFLARE_API_KEY',
   'INPUT_OPENAI-API-KEY',
   'INPUT_OPENAI_API_KEY',
+  'INPUT_PREVIEW-TOKEN',
+  'INPUT_PREVIEW_TOKEN',
   'INPUT_READ-TOKEN',
   'INPUT_READ_TOKEN',
   'INPUT_WRITE-TOKEN',
@@ -64,9 +66,13 @@ function requiredEnvironment(environment: Environment, name: string): string {
   return value;
 }
 
-function eventName(environment: Environment): ActionRequest['eventName'] {
+type TransportEventName = ActionRequest['eventName'] | 'pull_request';
+
+function eventName(environment: Environment): TransportEventName {
   const value = requiredEnvironment(environment, 'GITHUB_EVENT_NAME');
-  if (value !== 'issues' && value !== 'issue_comment') throw new Error('ACTION_EVENT_UNSUPPORTED');
+  if (value !== 'issues' && value !== 'issue_comment' && value !== 'pull_request') {
+    throw new Error('ACTION_EVENT_UNSUPPORTED');
+  }
   return value;
 }
 
@@ -130,6 +136,36 @@ async function writeOutputs(environment: Environment, result: ActionResult): Pro
   }
 }
 
+function pullRequestNoop(payload: unknown, runUrl?: string): ActionResult {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new Error('ACTION_EVENT_PAYLOAD_INVALID');
+  }
+  const { number, repository } = payload as {
+    number?: unknown;
+    repository?: { full_name?: unknown };
+  };
+  const repositoryName = repository?.full_name;
+  if (
+    typeof number !== 'number' ||
+    !Number.isSafeInteger(number) ||
+    number <= 0 ||
+    typeof repositoryName !== 'string' ||
+    repositoryName.length > 200 ||
+    !/^[^/\s]+\/[^/\s]+$/u.test(repositoryName)
+  ) {
+    throw new Error('ACTION_EVENT_PAYLOAD_INVALID');
+  }
+  return {
+    appId: appMetadata.appId,
+    issueNumber: number,
+    reasonCode: 'pull_request',
+    repository: repositoryName,
+    route: 'noop',
+    ...(runUrl ? { runUrl } : {}),
+    status: 'noop',
+  };
+}
+
 interface FixtureTransport {
   mode: 'duplicate';
 }
@@ -164,6 +200,7 @@ async function fixtureDependencies(
       lifecycleLabels: defaultLifecycleLabels,
       maxModelEvents: 4,
     }),
+    reconcileFailure: unavailable,
     reconcile: unavailable,
   };
 }
@@ -189,16 +226,21 @@ export async function runAction(
   try {
     const eventPath = requiredEnvironment(normalized.values, 'GITHUB_EVENT_PATH');
     const payload = JSON.parse(await readFile(eventPath, 'utf8')) as unknown;
-    const dependencies = await resolveDependencies(normalized.values, options.dependencies);
+    const incomingEventName = eventName(normalized.values);
     const runId = workflowRunId(normalized.values);
     const runUrl = trustedRunUrl(normalized.values);
+    if (incomingEventName === 'pull_request') {
+      const result = pullRequestNoop(payload, runUrl);
+      await writeOutputs(normalized.values, result);
+      (options.stdout ?? process.stdout).write(`${JSON.stringify(result)}\n`);
+      return result;
+    }
+    const dependencies = await resolveDependencies(normalized.values, options.dependencies);
     const result = await runTriageAction(
       {
         abortSignal: abortController.signal,
-        deliveryId:
-          normalized.values.GITHUB_DELIVERY ??
-          `${runId}:${normalized.values.GITHUB_RUN_ATTEMPT ?? '1'}`,
-        eventName: eventName(normalized.values),
+        deliveryId: normalized.values.GITHUB_DELIVERY || `workflow-run:${runId}`,
+        eventName: incomingEventName,
         payload,
         ...(runUrl ? { runUrl } : {}),
         workflowRunId: runId,

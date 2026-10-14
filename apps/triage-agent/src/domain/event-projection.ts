@@ -119,7 +119,8 @@ function projectBase(
   return {
     action: parsed.action,
     actor: {
-      association: parsed.issue.author_association,
+      association:
+        parsed.sender.id === parsed.issue.user.id ? parsed.issue.author_association : 'NONE',
       id: parsed.sender.id,
       login: parsed.sender.login,
       ...(parsed.sender.type ? { type: parsed.sender.type } : {}),

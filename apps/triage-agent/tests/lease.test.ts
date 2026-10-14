@@ -89,29 +89,64 @@ describe('per-issue lease decisions', () => {
   it('allows stale takeover only after terminal status and timeout/skew grace', () => {
     const candidate = {
       ...current,
-      acquiredAt: '2026-10-14T12:10:35.000Z',
-      expiresAt: '2026-10-14T12:21:00.000Z',
+      acquiredAt: '2026-10-14T12:00:45.000Z',
+      expiresAt: '2026-10-14T12:11:00.000Z',
       fencingToken: 'fence-2',
-      mutationDeadline: '2026-10-14T12:20:00.000Z',
+      mutationDeadline: '2026-10-14T12:10:00.000Z',
       workflowRunId: 101,
     };
     const options = {
       candidate,
       current,
       maxApiTimeoutMs: 30_000,
+      priorRunTerminalAt: '2026-10-14T12:00:10.000Z',
       priorRunStatus: 'completed' as const,
       toleratedClockSkewMs: 5_000,
     };
 
-    expect(decideLeaseAcquisition({ ...options, serverNow: '2026-10-14T12:10:34.999Z' })).toEqual({
+    expect(decideLeaseAcquisition({ ...options, serverNow: '2026-10-14T12:00:44.999Z' })).toEqual({
       kind: 'takeover_pending',
-      eligibleAt: '2026-10-14T12:10:35.000Z',
+      eligibleAt: '2026-10-14T12:00:45.000Z',
     });
-    expect(decideLeaseAcquisition({ ...options, serverNow: '2026-10-14T12:10:35.000Z' })).toEqual({
+    expect(decideLeaseAcquisition({ ...options, serverNow: '2026-10-14T12:00:45.000Z' })).toEqual({
       kind: 'taken_over',
       lease: candidate,
       previousFencingToken: 'fence-1',
     });
+  });
+
+  it('allows a terminal rerun attempt to replace the prior attempt after grace', () => {
+    const candidate = {
+      ...current,
+      acquiredAt: '2026-10-14T12:01:00.000Z',
+      expiresAt: '2026-10-14T12:11:00.000Z',
+      fencingToken: 'fence-2',
+      mutationDeadline: '2026-10-14T12:10:00.000Z',
+      workflowRunAttempt: 2,
+    };
+
+    expect(
+      decideLeaseAcquisition({
+        candidate,
+        current,
+        maxApiTimeoutMs: 30_000,
+        priorRunStatus: 'completed',
+        priorRunTerminalAt: '2026-10-14T12:00:25.000Z',
+        serverNow: '2026-10-14T12:01:00.000Z',
+        toleratedClockSkewMs: 5_000,
+      }),
+    ).toEqual({ kind: 'taken_over', lease: candidate, previousFencingToken: 'fence-1' });
+  });
+
+  it('fails closed when a terminal status has no trusted terminal timestamp', () => {
+    expect(
+      decideLeaseAcquisition({
+        candidate: { ...current, fencingToken: 'fence-2', workflowRunId: 101 },
+        current,
+        priorRunStatus: 'completed',
+        serverNow: '2026-10-14T12:20:00.000Z',
+      }),
+    ).toEqual({ kind: 'contended', ownerWorkflowRunId: 100 });
   });
 
   it('does not allow a nonterminal prior run to be taken over after expiry', () => {

@@ -11,6 +11,7 @@ import {
   cleanupProposal,
   reconcileConfirmedProposal,
   reconcileFixProposal,
+  reconcileLifecycleState,
   reconcileRejectedProposal,
   reconcileTriageReport,
 } from '../src/github/reconcile.js';
@@ -205,6 +206,52 @@ describe('fenced GitHub reconciliation', () => {
     expect(fake.comments[0]?.body).toContain(`${proposal.branch}@${proposal.headSha}`);
     expect(fake.comments[0]?.body).toContain('A verified fix is ready');
     expect(lease.assertCurrent).toHaveBeenCalledTimes(2);
+  });
+
+  it('discloses automatic PR confirmation bypass without confirm or reject instructions', async () => {
+    const fake = new FakeGitHub();
+    const { api } = client(fake);
+
+    await reconcileFixProposal({
+      ancillaryLabels: [],
+      api,
+      confirmationRequired: false,
+      identity,
+      labels: defaultLifecycleLabels,
+      preview: { status: 'skipped', urls: [] },
+      proposal,
+    });
+
+    expect(fake.comments[0]?.body).toContain('confirmation step is bypassed');
+    expect(fake.comments[0]?.body).not.toContain('confirm or reject');
+  });
+
+  it('replaces conflicting lifecycle labels on failure while preserving unrelated labels', async () => {
+    const fake = new FakeGitHub();
+    fake.labels = [
+      'customer-reported',
+      defaultLifecycleLabels.needs_triage,
+      defaultLifecycleLabels.fix_pending,
+    ];
+    const { api } = client(fake);
+
+    await expect(
+      reconcileLifecycleState({
+        api,
+        issueNumber: 42,
+        labels: defaultLifecycleLabels,
+        target: 'failed',
+      }),
+    ).rejects.toThrowError('LIFECYCLE_LABEL_CONFLICT');
+    await reconcileLifecycleState({
+      api,
+      issueNumber: 42,
+      labels: defaultLifecycleLabels,
+      replaceConflicts: true,
+      target: 'failed',
+    });
+
+    expect(fake.labels).toEqual([defaultLifecycleLabels.failed, 'customer-reported']);
   });
 
   it('adopts an existing matching PR and repairs state without duplication', async () => {

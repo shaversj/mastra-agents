@@ -56,6 +56,7 @@ async function hasMarker(
 
 async function reconcileLifecycleLabel(input: {
   ancillaryLabels?: readonly string[];
+  allowLifecycleConflict?: boolean;
   api: FencedGitHubMutationClient;
   issueNumber: number;
   labels: LifecycleLabels;
@@ -64,7 +65,9 @@ async function reconcileLifecycleLabel(input: {
   const current = [...(await input.api.readLabels(input.issueNumber))];
   const lifecycleValues = new Set(Object.values(input.labels));
   const currentLifecycle = current.filter((label) => lifecycleValues.has(label));
-  if (currentLifecycle.length > 1) throw new Error('LIFECYCLE_LABEL_CONFLICT');
+  if (currentLifecycle.length > 1 && !input.allowLifecycleConflict) {
+    throw new Error('LIFECYCLE_LABEL_CONFLICT');
+  }
   const retained = current.filter((label) => !lifecycleValues.has(label));
   const next = [
     ...new Set([input.labels[input.target], ...retained, ...(input.ancillaryLabels ?? [])]),
@@ -78,9 +81,13 @@ export async function reconcileLifecycleState(input: {
   api: FencedGitHubMutationClient;
   issueNumber: number;
   labels: LifecycleLabels;
+  replaceConflicts?: boolean;
   target: LifecycleState;
 }): Promise<void> {
-  await reconcileLifecycleLabel(input);
+  await reconcileLifecycleLabel({
+    ...input,
+    allowLifecycleConflict: input.replaceConflicts ?? false,
+  });
 }
 
 export async function reconcileTriageReport(input: {
@@ -131,6 +138,7 @@ export async function reconcileFixProposal(input: {
   allowedPreviewHosts?: readonly string[];
   ancillaryLabels: readonly string[];
   api: FencedGitHubMutationClient;
+  confirmationRequired?: boolean;
   identity: ReconciliationIdentity;
   labels: LifecycleLabels;
   preview: PreviewResult;
@@ -144,6 +152,7 @@ export async function reconcileFixProposal(input: {
   const visibleBody = renderProposalComment({
     allowedPreviewHosts: input.allowedPreviewHosts ?? [],
     branch: input.proposal.branch,
+    confirmationRequired: input.confirmationRequired ?? true,
     headSha: input.proposal.headSha,
     preview: input.preview,
     proposalId: input.proposal.id,

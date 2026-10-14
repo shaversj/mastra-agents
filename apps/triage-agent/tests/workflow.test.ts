@@ -1,14 +1,19 @@
 import { Mastra } from '@mastra/core/mastra';
 import { describe, expect, it } from 'vitest';
+import type { z } from 'zod';
 
 import { appMetadata } from '../src/config/app.js';
 import { proposalIdentity } from '../src/domain/proposal.js';
 import {
   createTriageWorkflow,
+  triageWorkflowInputSchema,
   type ModelInvocation,
   type ModelRequest,
 } from '../src/mastra/workflows/triage.js';
-import { createTriageCommentWorkflow } from '../src/mastra/workflows/triage-comment.js';
+import {
+  createTriageCommentWorkflow,
+  triageCommentInputSchema,
+} from '../src/mastra/workflows/triage-comment.js';
 
 type Script = Record<string, unknown | unknown[]>;
 
@@ -24,7 +29,7 @@ function scriptedModel(script: Script, calls: ModelRequest[] = []) {
   };
 }
 
-const input = {
+const input: z.output<typeof triageWorkflowInputSchema> = {
   allowedPackageLabels: ['pkg:core'],
   allowedPriorityLabels: ['priority:high'],
   attemptId: 'attempt-1',
@@ -47,7 +52,10 @@ const input = {
   totalRunMs: 12 * 60_000,
 };
 
-async function runTriage(script: Script) {
+async function runTriage(
+  script: Script,
+  inputData: z.output<typeof triageWorkflowInputSchema> = input,
+) {
   const model = scriptedModel(script);
   const workflow = createTriageWorkflow({
     admitChanges: async () => true,
@@ -60,10 +68,25 @@ async function runTriage(script: Script) {
   });
   const mastra = new Mastra({ workflows: { [appMetadata.workflowIds.triage]: workflow } });
   const run = await mastra.getWorkflow(appMetadata.workflowIds.triage).createRun();
-  return { calls: model.calls, result: await run.start({ inputData: input }) };
+  return { calls: model.calls, result: await run.start({ inputData }) };
 }
 
 describe('triage workflow', () => {
+  it('forwards a bounded retriage comment into the model context', async () => {
+    const triggeringComment = { body: 'Run npm test -- widget to reproduce.', id: 5001 };
+    const { calls, result } = await runTriage(
+      {
+        reproduce: { decision: 'not_actionable', reasonCode: 'not_a_bug' },
+        draft_report: { details: ['No supported bug was found.'], headline: 'Triage complete' },
+      },
+      { ...input, triggeringComment },
+    );
+
+    expect(result.status).toBe('success');
+    expect(calls).not.toHaveLength(0);
+    for (const call of calls) expect(call.payload).toMatchObject({ triggeringComment });
+  });
+
   it.each([
     ['reproduce', { decision: 'not_actionable', reasonCode: 'not_a_bug' }, 'not_actionable'],
     [
@@ -89,7 +112,7 @@ describe('triage workflow', () => {
         headline: 'Triage complete',
       },
       verify: { decision: 'continue' },
-      fix: { decision: 'continue' },
+      fix: { decision: 'verified_fix' },
     };
     script[phase] = closure;
 
@@ -109,7 +132,7 @@ describe('triage workflow', () => {
         expect.arrayContaining([expect.objectContaining({ phase })]),
       );
     }
-    const order = ['reproduce', 'diagnose', 'verify', 'fix'];
+    const order = ['reproduce', 'diagnose', 'fix', 'verify'];
     expect(calls.map(({ phase: called }) => called)).toEqual([
       ...order.slice(0, order.indexOf(phase) + 1),
       'draft_report',
@@ -139,6 +162,51 @@ describe('triage workflow', () => {
     for (const phase of ['classify_outcome', 'draft_report', 'select_labels']) {
       expect(calls.find((call) => call.phase === phase)).toMatchObject({
         activeTools: [],
+      });
+    }
+  });
+
+  it('collects trusted verification evidence only after the fix is applied', async () => {
+    let fixApplied = false;
+    const phases: string[] = [];
+    const workflow = createTriageWorkflow({
+      admitChanges: async () => true,
+      collectEvidence: async ({ phase }) => {
+        phases.push(phase);
+        if (phase === 'fix') fixApplied = true;
+        if (phase === 'verify') {
+          return [{ kind: 'test', phase, status: fixApplied ? 'passed' : 'failed' }];
+        }
+        return [{ kind: 'model_stage', phase, status: 'observed' }];
+      },
+      invokeModel: scriptedModel({
+        reproduce: { decision: 'continue' },
+        diagnose: { decision: 'continue' },
+        fix: { decision: 'verified_fix' },
+        verify: { decision: 'continue' },
+        classify_outcome: { decision: 'verified_fix' },
+        draft_report: {
+          headline: 'A post-fix verification passed',
+          details: ['The trusted test ran after the edit phase.'],
+        },
+        select_labels: { packageLabels: ['pkg:core'], priorityLabel: 'priority:high' },
+      }).invoke,
+    });
+    const mastra = new Mastra({ workflows: { [appMetadata.workflowIds.triage]: workflow } });
+    const run = await mastra.getWorkflow(appMetadata.workflowIds.triage).createRun();
+    const result = await run.start({ inputData: input });
+
+    expect(phases).toEqual(['reproduce', 'diagnose', 'fix', 'verify']);
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.result).toMatchObject({
+        mutationPlan: expect.objectContaining({ kind: 'publish_proposal' }),
+        state: 'fix_pending',
+      });
+      expect(result.result.evidence).toContainEqual({
+        kind: 'test',
+        phase: 'verify',
+        status: 'passed',
       });
     }
   });
@@ -348,6 +416,36 @@ describe('comment workflow', () => {
     headSha: 'b'.repeat(40),
   });
 
+  it('bounds issue context before confirmation-time PR drafting', () => {
+    const base = {
+      actor: { association: 'NONE' as const, login: 'reporter' },
+      issue: {
+        body: 'A bounded issue body',
+        number: 42,
+        reporterLogin: 'reporter',
+        title: 'A bounded issue title',
+      },
+      proposal,
+      remoteHeadSha: proposal.headSha,
+      route: 'confirmation' as const,
+      triggeringComment: { body: 'confirm', id: 100 },
+    };
+
+    expect(triageCommentInputSchema.safeParse(base).success).toBe(true);
+    expect(
+      triageCommentInputSchema.safeParse({
+        ...base,
+        issue: { ...base.issue, body: 'x'.repeat(65_537) },
+      }).success,
+    ).toBe(false);
+    expect(
+      triageCommentInputSchema.safeParse({
+        ...base,
+        issue: { ...base.issue, title: 'x'.repeat(1_025) },
+      }).success,
+    ).toBe(false);
+  });
+
   async function runComment(
     route: 'confirmation' | 'retriage',
     response: unknown,
@@ -369,7 +467,12 @@ describe('comment workflow', () => {
     const result = await run.start({
       inputData: {
         actor: { association: 'NONE', login: 'reporter' },
-        issue: { number: 42, reporterLogin: 'reporter' },
+        issue: {
+          body: 'The widget command fails after the latest release.',
+          number: 42,
+          reporterLogin: 'reporter',
+          title: 'Widget command fails',
+        },
         maxModelRetries: 1,
         maxStageSteps: 4,
         proposal,
@@ -420,9 +523,20 @@ describe('comment workflow', () => {
     const confirmationCall = calls.find(({ phase }) => phase === 'classify_confirmation');
     expect(confirmationCall).toMatchObject({ activeTools: [] });
     expect(confirmationCall).not.toHaveProperty('skill');
-    expect(calls.find(({ phase }) => phase === 'draft_pr_content')).toMatchObject({
-      activeTools: [],
-      skill: 'pr-skill',
+    const draftCall = calls.find(({ phase }) => phase === 'draft_pr_content');
+    expect(draftCall).toMatchObject({ activeTools: [], skill: 'pr-skill' });
+    expect(draftCall?.payload).toEqual({
+      issue: {
+        body: 'The widget command fails after the latest release.',
+        number: 42,
+        title: 'Widget command fails',
+      },
+      proposal: {
+        branch: proposal.branch,
+        headSha: proposal.headSha,
+        id: proposal.id,
+        verificationStatus: 'verified',
+      },
     });
   });
 
@@ -466,7 +580,12 @@ describe('comment workflow', () => {
     const result = await run.start({
       inputData: {
         actor: { association: 'NONE', login: 'reporter' },
-        issue: { number: 42, reporterLogin: 'reporter' },
+        issue: {
+          body: 'The widget command fails after the latest release.',
+          number: 42,
+          reporterLogin: 'reporter',
+          title: 'Widget command fails',
+        },
         maxModelRetries: 1,
         maxStageSteps: 4,
         proposal,

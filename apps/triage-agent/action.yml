@@ -85,8 +85,14 @@ inputs:
     description: 'Optional offline, secret-free changed-code inspection command returning strict JSON'
     required: false
   preview-allowed-hosts:
-    description: 'Comma-separated HTTPS host allowlist for preview results'
+    description: 'Comma-separated HTTPS host allowlist for the launcher and preview results'
     default: ''
+  preview-launch-url:
+    description: 'Optional HTTPS endpoint for the metadata-only preview launcher'
+    required: false
+  preview-token:
+    description: 'Preview-scoped credential sent only to the metadata-only launcher'
+    required: false
   activation-policy:
     description: 'automatic-public or trusted'
     default: 'automatic-public'

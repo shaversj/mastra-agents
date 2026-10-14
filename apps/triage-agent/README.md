@@ -106,7 +106,16 @@ By default, a verified change becomes `triage: fix pending`. The issue author or
 { "artifactId": "project-specific-artifact-id" }
 ```
 
-Changed code never receives GitHub, provider, or preview credentials. The internal preview boundary accepts only allowlisted HTTPS result hosts from a separate metadata-only launcher with no checkout mount. The first Action release does not expose a network launcher input, so local inspection cannot publish a URL; missing or failed preview publication is nonfatal and the exact branch and SHA remain available for testing. `preview-allowed-hosts` reserves the approved host list for a trusted launcher integration.
+Changed code never receives GitHub, provider, or preview credentials. To publish a preview URL, configure the metadata-only launcher separately:
+
+```yaml
+preview-command: ./scripts/prepare-preview
+preview-launch-url: https://preview.example.com/api/launch
+preview-token: ${{ secrets.PREVIEW_TOKEN }}
+preview-allowed-hosts: preview.example.com
+```
+
+The offline command receives no secrets or network and returns only the artifact ID. After the proposal branch is published, the trusted Action posts that ID plus immutable repository, branch, and SHA metadata to `preview-launch-url` with only `preview-token`; it does not mount or transmit checkout contents. The launcher response is limited to 8 KiB of strict JSON and at most five allowlisted HTTPS URLs. The launcher URL and every returned URL must use a host in `preview-allowed-hosts`. Missing or failed preview publication is nonfatal, and the exact branch and SHA remain available for testing.
 
 ## Models, data, and observability
 
@@ -143,6 +152,6 @@ Move `triage-agent-v1` only after the app check, fixture evals, Node 24 artifact
 - The first release is public-repository-only and adds an optional trusted-activation mode.
 - GitHub comments, labels, pull requests, and action-owned Git refs are the only durable cross-run state; there is no database or Mastra memory.
 - Reproduction and editing run in a credential-free, offline native sandbox with bounded tools and final diff admission.
-- Preview inspection is generic rather than Astro-specific, and v1 leaves networked preview publication to a future trusted launcher.
+- Preview inspection is generic rather than Astro-specific; optional network publication is delegated to an explicitly configured metadata-only launcher with a preview-scoped credential.
 - The default publication token is intentionally non-recursive; elevated publication requires an explicit downstream-CI safety declaration.
 - Pull-request-close cleanup is not automatic in v1. Issue-close cleanup remains conservative and never deletes a branch backing an open pull request.

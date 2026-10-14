@@ -1,16 +1,15 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 
 import type { ActionInputs } from './inputs.js';
 import type {
   ActionControllerDependencies,
-  ActionLease,
   ActionResult,
   ModelRuntime,
   RoutingSnapshot,
 } from './run.js';
+import { runRegisteredWorkflow, runTriageWorkflow } from './workflow-adapter.js';
 import { appMetadata } from '../config/app.js';
 import {
   defaultLifecycleLabels,
@@ -27,20 +26,9 @@ import type { ProjectedGitHubEvent } from '../domain/event-projection.js';
 import { proposalIdentity, type ProposalIdentity } from '../domain/proposal.js';
 import { createHistoryAdapter } from '../git/history.js';
 import { publishProposalBranch, type PublicationPolicyDecision } from '../git/repository.js';
-import {
-  createLeaseGuard,
-  assertLeaseIdentity,
-  decideLeaseAcquisition,
-  leaseRefForIssue,
-  type LeaseRecord,
-  type WorkflowRunStatus,
-} from '../github/lease.js';
-import {
-  FencedGitHubMutationClient,
-  type GitHubActionComment,
-  type GitHubMutationTransport,
-  type GitHubPullRequest,
-} from '../github/mutation-client.js';
+import { createLiveLease } from '../github/live-lease.js';
+import { GitHubRest } from '../github/live-rest.js';
+import { FencedGitHubMutationClient } from '../github/mutation-client.js';
 import {
   cleanupProposal,
   reconcileConfirmedProposal,
@@ -53,10 +41,18 @@ import {
 import { createTriageMastra } from '../mastra/index.js';
 import { triageCommentOutputSchema } from '../mastra/workflows/triage-comment.js';
 import { triageWorkflowOutputSchema } from '../mastra/workflows/triage.js';
-import { parsePreviewInspectionOutput, runPreview } from '../preview/run-preview.js';
+import {
+  createHttpPreviewLauncher,
+  parsePreviewInspectionOutput,
+  runPreview,
+} from '../preview/run-preview.js';
 import { assertSafeOutboundText } from '../security/content-policy.js';
 import { assertSafeGitEnvironment, secureGitEnvironment } from '../security/git-environment.js';
 import { admitWorkspaceChanges, type AdmittedChanges } from '../security/diff-policy.js';
+import {
+  resolvePreparedDependencyPath,
+  resolveProjectSkillFile,
+} from '../security/project-paths.js';
 import {
   createMaterializedWorkspace,
   resolveSandboxIsolation,
@@ -66,322 +62,20 @@ import {
 const executeFile = promisify(execFile);
 const trustedAssociations = new Set(['COLLABORATOR', 'MEMBER', 'OWNER']);
 
+export { runRegisteredWorkflow } from './workflow-adapter.js';
+export { priorLeaseOwnerDiffers } from '../github/live-lease.js';
+export { deleteRemoteBranchWithLease } from '../github/live-rest.js';
+export {
+  resolvePreparedDependencyPath,
+  resolveProjectSkillFile,
+} from '../security/project-paths.js';
+
 interface LiveEnvironment {
   GITHUB_API_URL?: string;
   GITHUB_REPOSITORY?: string;
+  GITHUB_SERVER_URL?: string;
   GITHUB_SHA?: string;
   GITHUB_WORKSPACE?: string;
-}
-
-interface GitHubResponse<T> {
-  data: T;
-  date: string;
-}
-
-interface RestComment {
-  body: string | null;
-  id: number;
-  user: { login: string };
-}
-
-interface RestPullRequest {
-  base: { ref: string };
-  body: string | null;
-  head: { ref: string; sha: string };
-  number: number;
-  state: string;
-  title: string;
-  user: { login: string };
-}
-
-interface RestLabel {
-  name: string;
-}
-
-class GitHubRest implements GitHubMutationTransport {
-  constructor(
-    private readonly repository: string,
-    private readonly token: string,
-    private readonly apiUrl = 'https://api.github.com',
-    private readonly actionLogin?: string,
-  ) {}
-
-  async request<T>(method: string, path: string, body?: unknown): Promise<GitHubResponse<T>> {
-    const response = await fetch(`${this.apiUrl}/repos/${this.repository}${path}`, {
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-        'User-Agent': 'mastra-triage-agent',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-      method,
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) throw new Error(`GITHUB_API_${response.status}`);
-    const date = response.headers.get('date');
-    if (!date || !Number.isFinite(Date.parse(date))) throw new Error('GITHUB_SERVER_TIME_MISSING');
-    return {
-      data: response.status === 204 ? (undefined as T) : ((await response.json()) as T),
-      date: new Date(date).toISOString(),
-    };
-  }
-
-  async authenticatedUser(): Promise<{ login: string }> {
-    const response = await fetch(`${this.apiUrl}/user`, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${this.token}`,
-        'User-Agent': 'mastra-triage-agent',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) throw new Error(`GITHUB_API_${response.status}`);
-    return (await response.json()) as { login: string };
-  }
-
-  private async boundedPages<T>(
-    path: string,
-    maximumItems: number,
-    maximumPages: number,
-  ): Promise<T[]> {
-    const items: T[] = [];
-    for (let page = 1; page <= maximumPages && items.length < maximumItems; page += 1) {
-      const separator = path.includes('?') ? '&' : '?';
-      const { data } = await this.request<T[]>(
-        'GET',
-        `${path}${separator}per_page=100&page=${page}`,
-      );
-      items.push(...data.slice(0, maximumItems - items.length));
-      if (data.length < 100) break;
-    }
-    return items;
-  }
-
-  async workflowRunStatus(workflowRunId: number, attempt: number): Promise<WorkflowRunStatus> {
-    const { data } = await this.request<{
-      conclusion: string | null;
-      status: 'completed' | 'in_progress' | 'queued';
-    }>('GET', `/actions/runs/${workflowRunId}/attempts/${attempt}`);
-    if (data.status !== 'completed') return data.status;
-    if (
-      data.conclusion === 'cancelled' ||
-      data.conclusion === 'failure' ||
-      data.conclusion === 'skipped' ||
-      data.conclusion === 'timed_out'
-    ) {
-      return data.conclusion;
-    }
-    return 'completed';
-  }
-
-  async createComment(issueNumber: number, body: string): Promise<GitHubActionComment> {
-    const { data } = await this.request<{ body: string; id: number; user: { login: string } }>(
-      'POST',
-      `/issues/${issueNumber}/comments`,
-      { body },
-    );
-    return { authorIsAction: data.user.login === this.actionLogin, body: data.body, id: data.id };
-  }
-
-  async createPullRequest(input: {
-    base: string;
-    body: string;
-    head: string;
-    headSha: string;
-    title: string;
-  }): Promise<GitHubPullRequest> {
-    const { data } = await this.request<RestPullRequest>('POST', '/pulls', {
-      base: input.base,
-      body: input.body,
-      head: input.head,
-      title: input.title,
-    });
-    return pullRequest(data, this.actionLogin);
-  }
-
-  async deleteBranch(branch: string, expectedSha: string): Promise<void> {
-    if ((await this.getBranchSha(branch)) !== expectedSha) throw new Error('PROPOSAL_BRANCH_MOVED');
-    await this.request('DELETE', `/git/refs/heads/${encodeURIComponent(branch)}`);
-  }
-
-  async getBranchSha(branch: string): Promise<string | null> {
-    try {
-      const { data } = await this.request<{ object: { sha: string } }>(
-        'GET',
-        `/git/ref/heads/${encodeURIComponent(branch)}`,
-      );
-      return data.object.sha;
-    } catch (error) {
-      if (error instanceof Error && error.message === 'GITHUB_API_404') return null;
-      throw error;
-    }
-  }
-
-  async readActionProposal(input: {
-    baseSha: string;
-    branch: string;
-    eventFingerprint: string;
-    fencingToken: string;
-    issueNumber: number;
-  }): Promise<ProposalIdentity | null> {
-    const headSha = await this.getBranchSha(input.branch);
-    if (!headSha) return null;
-    const { data } = await this.request<{ message: string; parents: Array<{ sha: string }> }>(
-      'GET',
-      `/git/commits/${headSha}`,
-    );
-    const trailers = new Map(
-      data.message.split('\n').flatMap((line) => {
-        const match = /^(Triage-Agent-[A-Za-z]+): (.+)$/u.exec(line);
-        return match?.[1] && match[2] ? [[match[1], match[2]] as const] : [];
-      }),
-    );
-    if (
-      data.parents.length !== 1 ||
-      data.parents[0]?.sha !== input.baseSha ||
-      trailers.get('Triage-Agent-Repository') !== this.repository ||
-      trailers.get('Triage-Agent-Issue') !== String(input.issueNumber) ||
-      trailers.get('Triage-Agent-Branch') !== input.branch ||
-      trailers.get('Triage-Agent-Base') !== input.baseSha ||
-      trailers.get('Triage-Agent-Event') !== input.eventFingerprint ||
-      trailers.get('Triage-Agent-Fence') !== input.fencingToken
-    ) {
-      return null;
-    }
-    return proposalIdentity({ baseSha: input.baseSha, branch: input.branch, headSha });
-  }
-
-  async listComments(issueNumber: number): Promise<readonly GitHubActionComment[]> {
-    const data = await this.boundedPages<RestComment>(
-      `/issues/${issueNumber}/comments?sort=created&direction=desc`,
-      500,
-      5,
-    );
-    return data.map((comment) => ({
-      authorIsAction: comment.user.login === this.actionLogin,
-      body: String(comment.body ?? '').slice(0, 100_000),
-      id: comment.id,
-    }));
-  }
-
-  async listPullRequests(input: {
-    base?: string;
-    head: string;
-  }): Promise<readonly GitHubPullRequest[]> {
-    const owner = this.repository.split('/')[0];
-    if (!owner) throw new Error('GITHUB_REPOSITORY_INVALID');
-    const query = new URLSearchParams({ head: `${owner}:${input.head}`, state: 'all' });
-    if (input.base) query.set('base', input.base);
-    const data = await this.boundedPages<RestPullRequest>(`/pulls?${query}`, 300, 3);
-    return data.map((value) => pullRequest(value, this.actionLogin));
-  }
-
-  async listRepositoryLabels(): Promise<readonly string[]> {
-    const data = await this.boundedPages<RestLabel>('/labels', 500, 5);
-    return data.map(({ name }) => name);
-  }
-
-  async readLabels(issueNumber: number): Promise<readonly string[]> {
-    const { data } = await this.request<{ labels: Array<{ name: string }> }>(
-      'GET',
-      `/issues/${issueNumber}`,
-    );
-    return data.labels.map(({ name }) => name);
-  }
-
-  async setLabels(issueNumber: number, labels: string[]): Promise<void> {
-    await this.request('PUT', `/issues/${issueNumber}/labels`, { labels });
-  }
-}
-
-function pullRequest(value: RestPullRequest, actionLogin: string | undefined): GitHubPullRequest {
-  return {
-    authorIsAction: Boolean(actionLogin) && value.user.login === actionLogin,
-    base: value.base.ref,
-    body: String(value.body ?? ''),
-    head: value.head.ref,
-    headSha: value.head.sha,
-    id: value.number,
-    open: value.state === 'open',
-    title: value.title,
-  };
-}
-
-function isContained(root: string, candidate: string): boolean {
-  const path = relative(root, candidate);
-  return path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
-}
-
-export async function resolveProjectSkillFile(
-  repositoryRoot: string,
-  configuredPath: string,
-): Promise<string | undefined> {
-  if (
-    !configuredPath ||
-    isAbsolute(configuredPath) ||
-    configuredPath.includes('\\') ||
-    /^[A-Za-z]:/u.test(configuredPath)
-  ) {
-    return undefined;
-  }
-  const segments = configuredPath.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    return undefined;
-  }
-
-  const canonicalRoot = await realpath(repositoryRoot).catch(() => undefined);
-  if (!canonicalRoot) return undefined;
-  let candidate = canonicalRoot;
-  for (const [index, segment] of [...segments, 'SKILL.md'].entries()) {
-    candidate = resolve(candidate, segment);
-    if (!isContained(canonicalRoot, candidate)) return undefined;
-    const metadata = await lstat(candidate).catch(() => undefined);
-    if (!metadata || metadata.isSymbolicLink()) return undefined;
-    const isSkillFile = index === segments.length;
-    if (isSkillFile ? !metadata.isFile() : !metadata.isDirectory()) return undefined;
-  }
-
-  const canonicalCandidate = await realpath(candidate).catch(() => undefined);
-  return canonicalCandidate && isContained(canonicalRoot, canonicalCandidate)
-    ? canonicalCandidate
-    : undefined;
-}
-
-export async function resolvePreparedDependencyPath(
-  repositoryRoot: string,
-  configuredPath: string,
-): Promise<string | undefined> {
-  if (
-    !configuredPath ||
-    isAbsolute(configuredPath) ||
-    configuredPath.includes('\\') ||
-    /^[A-Za-z]:/u.test(configuredPath)
-  ) {
-    return undefined;
-  }
-  const segments = configuredPath.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    return undefined;
-  }
-
-  const canonicalRoot = await realpath(repositoryRoot).catch(() => undefined);
-  if (!canonicalRoot) return undefined;
-  let candidate = canonicalRoot;
-  for (const segment of segments) {
-    candidate = resolve(candidate, segment);
-    if (!isContained(canonicalRoot, candidate)) return undefined;
-    const metadata = await lstat(candidate).catch(() => undefined);
-    if (!metadata || metadata.isSymbolicLink()) return undefined;
-  }
-  const finalMetadata = await lstat(candidate).catch(() => undefined);
-  if (!finalMetadata?.isDirectory()) return undefined;
-  const canonicalCandidate = await realpath(candidate).catch(() => undefined);
-  return canonicalCandidate && isContained(canonicalRoot, canonicalCandidate)
-    ? canonicalCandidate
-    : undefined;
 }
 
 interface StoredState {
@@ -415,104 +109,6 @@ interface LiveModelRuntime extends ModelRuntime {
   workflowOutput?:
     | { kind: 'comment'; value: ReturnType<typeof triageCommentOutputSchema.parse> }
     | { kind: 'triage'; value: ReturnType<typeof triageWorkflowOutputSchema.parse> };
-}
-
-export async function runRegisteredWorkflow(
-  mastra: unknown,
-  workflowId: string,
-  inputData: unknown,
-  abortSignal?: AbortSignal,
-): Promise<unknown> {
-  const registry = mastra as {
-    getWorkflow(id: string): {
-      createRun(): Promise<{
-        cancel(): Promise<void>;
-        start(input: {
-          inputData: unknown;
-          tracingOptions: { hideInput: true; hideOutput: true };
-        }): Promise<
-          { result: unknown; status: 'success' } | { status: Exclude<string, 'success'> }
-        >;
-      }>;
-    };
-  };
-  abortSignal?.throwIfAborted();
-  const run = await registry.getWorkflow(workflowId).createRun();
-  abortSignal?.throwIfAborted();
-  let removeAbortListener: () => void = () => undefined;
-  const abortPromise = abortSignal
-    ? new Promise<never>((_resolve, reject) => {
-        let cancellationStarted = false;
-        const cancel = () => {
-          if (cancellationStarted) return;
-          cancellationStarted = true;
-          void run
-            .cancel()
-            .catch(() => undefined)
-            .then(() => {
-              reject(
-                abortSignal.reason instanceof Error
-                  ? abortSignal.reason
-                  : new Error('ACTION_ABORTED'),
-              );
-            });
-        };
-        abortSignal.addEventListener('abort', cancel, { once: true });
-        removeAbortListener = () => abortSignal.removeEventListener('abort', cancel);
-        if (abortSignal.aborted) cancel();
-      })
-    : undefined;
-  let result: { result: unknown; status: 'success' } | { status: Exclude<string, 'success'> };
-  try {
-    const started = run.start({
-      inputData,
-      tracingOptions: { hideInput: true, hideOutput: true },
-    });
-    result = abortPromise ? await Promise.race([started, abortPromise]) : await started;
-  } finally {
-    removeAbortListener();
-  }
-  if (result.status !== 'success' || !('result' in result)) {
-    throw new Error('MASTRA_WORKFLOW_FAILED');
-  }
-  return result.result;
-}
-
-async function runTriageWorkflow(input: {
-  abortSignal?: AbortSignal;
-  environment: LiveEnvironment;
-  event: ProjectedGitHubEvent;
-  generation: number;
-  inputs: ActionInputs;
-  mastra: unknown;
-  runWorkflow?: typeof runRegisteredWorkflow;
-}): Promise<ReturnType<typeof triageWorkflowOutputSchema.parse>> {
-  return triageWorkflowOutputSchema.parse(
-    await (input.runWorkflow ?? runRegisteredWorkflow)(
-      input.mastra,
-      appMetadata.workflowIds.triage,
-      {
-        allowedPackageLabels: input.inputs.allowedPackageLabels,
-        allowedPriorityLabels: input.inputs.allowedPriorityLabels,
-        attemptId: input.event.eventFingerprint,
-        autoPrOnFix: input.inputs.autoPrOnFix,
-        eventFingerprint: input.event.eventFingerprint,
-        generation: input.generation,
-        issue: {
-          body: input.event.issue.body,
-          number: input.event.issue.number,
-          reporterLogin: input.event.issue.reporterLogin,
-          title: input.event.issue.title,
-        },
-        repository: {
-          baseSha: input.environment.GITHUB_SHA,
-          defaultBranch: input.event.repository.defaultBranch,
-          fullName: input.event.repository.fullName,
-        },
-      },
-      input.abortSignal,
-    ),
-  );
 }
 
 async function reconcilePullRequestLabel(
@@ -611,129 +207,6 @@ function providerEnvironment(inputs: ActionInputs): () => void {
   };
 }
 
-async function createLease(
-  api: GitHubRest,
-  event: ProjectedGitHubEvent,
-  workflowRunId: number,
-  workflowRunAttempt: number,
-): Promise<ActionLease> {
-  const ref = leaseRefForIssue(event.repository.id, event.issue.number).replace(/^refs\//u, '');
-  const read = async (): Promise<{
-    lease: LeaseRecord;
-    refSha: string;
-    serverNow: string;
-  } | null> => {
-    try {
-      const reference = await api.request<{ object: { sha: string } }>('GET', `/git/ref/${ref}`);
-      const commit = await api.request<{ tree: { sha: string } }>(
-        'GET',
-        `/git/commits/${reference.data.object.sha}`,
-      );
-      const tree = await api.request<{ tree: Array<{ path: string; sha: string }> }>(
-        'GET',
-        `/git/trees/${commit.data.tree.sha}`,
-      );
-      const blobSha = tree.data.tree.find(({ path }) => path === 'lease.json')?.sha;
-      if (!blobSha) throw new Error('LEASE_BLOB_MISSING');
-      const blob = await api.request<{ content: string }>('GET', `/git/blobs/${blobSha}`);
-      const lease = JSON.parse(
-        Buffer.from(blob.data.content, 'base64').toString('utf8'),
-      ) as LeaseRecord;
-      assertLeaseIdentity(lease, {
-        issueNumber: event.issue.number,
-        repository: event.repository.fullName,
-      });
-      return {
-        lease,
-        refSha: reference.data.object.sha,
-        serverNow: reference.date,
-      };
-    } catch (error) {
-      if (error instanceof Error && error.message === 'GITHUB_API_404') return null;
-      throw error;
-    }
-  };
-  const current = await read();
-  const serverNow = current?.serverNow ?? (await api.request('GET', '')).date;
-  const now = Date.parse(serverNow);
-  const candidate: LeaseRecord =
-    current?.lease.workflowRunId === workflowRunId &&
-    current.lease.workflowRunAttempt === workflowRunAttempt
-      ? current.lease
-      : {
-          acquiredAt: new Date(now).toISOString(),
-          expiresAt: new Date(now + 10 * 60_000).toISOString(),
-          fencingToken: crypto.randomUUID(),
-          issueNumber: event.issue.number,
-          mutationDeadline: new Date(now + 9 * 60_000).toISOString(),
-          repository: event.repository.fullName,
-          workflowRunId,
-          workflowRunAttempt,
-        };
-  const priorRunStatus =
-    current && current.lease.workflowRunId !== workflowRunId
-      ? await api.workflowRunStatus(current.lease.workflowRunId, current.lease.workflowRunAttempt)
-      : undefined;
-  const decision = decideLeaseAcquisition({
-    candidate,
-    current: current?.lease ?? null,
-    maxApiTimeoutMs: 30_000,
-    ...(priorRunStatus ? { priorRunStatus } : {}),
-    serverNow,
-    toleratedClockSkewMs: 5_000,
-  });
-  if (
-    decision.kind !== 'acquired' &&
-    decision.kind !== 'already_owned' &&
-    decision.kind !== 'taken_over'
-  ) {
-    throw new Error('LEASE_CONTENDED');
-  }
-  const lease = decision.lease;
-  if (decision.kind === 'acquired' || decision.kind === 'taken_over') {
-    const blob = await api.request<{ sha: string }>('POST', '/git/blobs', {
-      content: Buffer.from(JSON.stringify(lease)).toString('base64'),
-      encoding: 'base64',
-    });
-    const tree = await api.request<{ sha: string }>('POST', '/git/trees', {
-      tree: [{ mode: '100644', path: 'lease.json', sha: blob.data.sha, type: 'blob' }],
-    });
-    const commit = await api.request<{ sha: string }>('POST', '/git/commits', {
-      message: `triage lease ${event.issue.number}`,
-      parents: current ? [current.refSha] : [],
-      tree: tree.data.sha,
-    });
-    try {
-      if (decision.kind === 'acquired') {
-        await api.request('POST', '/git/refs', { ref: `refs/${ref}`, sha: commit.data.sha });
-      } else {
-        await api.request('PATCH', `/git/refs/${ref}`, { force: false, sha: commit.data.sha });
-      }
-    } catch (error) {
-      if (error instanceof Error && error.message === 'GITHUB_API_422') {
-        throw new Error('LEASE_CONTENDED', { cause: error });
-      }
-      throw error;
-    }
-  }
-  const guard = createLeaseGuard({
-    expected: { fencingToken: lease.fencingToken, workflowRunAttempt, workflowRunId },
-    readCurrent: async () => {
-      const value = await read();
-      if (!value) throw new Error('LEASE_LOST_MISSING');
-      return value;
-    },
-  });
-  return {
-    assertCurrent: () => guard.assertCurrent(),
-    fencingToken: lease.fencingToken,
-    async release() {
-      // Retaining the terminal record avoids a racy delete. The next run takes it over with a
-      // fast-forward compare-and-swap after GitHub reports this workflow terminal.
-    },
-  };
-}
-
 export function createLiveActionDependencies(input: {
   environment: LiveEnvironment;
   inputs: ActionInputs;
@@ -746,8 +219,8 @@ export function createLiveActionDependencies(input: {
   let writeApi: GitHubRest;
 
   return {
-    acquireLease: ({ event, workflowRunAttempt, workflowRunId }) =>
-      createLease(writeApi, event, workflowRunId, workflowRunAttempt),
+    acquireLease: ({ abortSignal, event, workflowRunAttempt, workflowRunId }) =>
+      createLiveLease(writeApi, event, workflowRunId, workflowRunAttempt, abortSignal),
     async createModelRuntime({ inputs, route }) {
       if (!inputs.triageSkill) throw new Error('MODEL_ROUTE_TRIAGE_SKILL_REQUIRED');
       const repositoryRoot = input.environment.GITHUB_WORKSPACE;
@@ -864,7 +337,7 @@ export function createLiveActionDependencies(input: {
       if (route.kind === 'triage') {
         const output = await runTriageWorkflow({
           ...(abortSignal ? { abortSignal } : {}),
-          environment: input.environment,
+          baseSha: input.environment.GITHUB_SHA,
           event,
           generation: route.generation,
           inputs: input.inputs,
@@ -903,7 +376,12 @@ export function createLiveActionDependencies(input: {
           appMetadata.workflowIds.comment,
           {
             actor: { association: event.actor.association, login: event.actor.login },
-            issue: { number: event.issue.number, reporterLogin: event.issue.reporterLogin },
+            issue: {
+              body: event.issue.body,
+              number: event.issue.number,
+              reporterLogin: event.issue.reporterLogin,
+              title: event.issue.title,
+            },
             proposal,
             remoteHeadSha,
             route: route.kind === 'classify_fix_response' ? 'confirmation' : 'retriage',
@@ -915,12 +393,13 @@ export function createLiveActionDependencies(input: {
       if (route.kind === 'classify_retriage' && output.action === 'rerun_triage') {
         const triageOutput = await runTriageWorkflow({
           ...(abortSignal ? { abortSignal } : {}),
-          environment: input.environment,
+          baseSha: input.environment.GITHUB_SHA,
           event,
           generation: route.generation,
           inputs: input.inputs,
           mastra: live.mastra,
           ...(input.runWorkflow ? { runWorkflow: input.runWorkflow } : {}),
+          triggeringComment: { body: event.comment.body, id: event.comment.id },
         });
         live.workflowOutput = { kind: 'triage', value: triageOutput };
         return {
@@ -993,27 +472,39 @@ export function createLiveActionDependencies(input: {
         repository,
         input.inputs.readToken,
         input.environment.GITHUB_API_URL,
+        undefined,
+        input.environment.GITHUB_SERVER_URL,
       );
       const sharedIdentity = input.inputs.readToken === input.inputs.writeToken;
       const writeIdentityApi = sharedIdentity
         ? readIdentityApi
-        : new GitHubRest(repository, input.inputs.writeToken, input.environment.GITHUB_API_URL);
+        : new GitHubRest(
+            repository,
+            input.inputs.writeToken,
+            input.environment.GITHUB_API_URL,
+            undefined,
+            input.environment.GITHUB_SERVER_URL,
+          );
       const readIdentityPromise = readIdentityApi.authenticatedUser();
       const [readIdentity, writeIdentity] = sharedIdentity
         ? await readIdentityPromise.then((identity) => [identity, identity] as const)
         : await Promise.all([readIdentityPromise, writeIdentityApi.authenticatedUser()]);
       const actionLogin = writeIdentity.login;
+      const configuredPublicationPolicy = publicationPolicy(input.inputs, actionLogin);
+      if (!configuredPublicationPolicy.authorized) throw new Error('PUBLICATION_POLICY_DENIED');
       readApi = new GitHubRest(
         repository,
         input.inputs.readToken,
         input.environment.GITHUB_API_URL,
         actionLogin,
+        input.environment.GITHUB_SERVER_URL,
       );
       writeApi = new GitHubRest(
         repository,
         input.inputs.writeToken,
         input.environment.GITHUB_API_URL,
         actionLogin,
+        input.environment.GITHUB_SERVER_URL,
       );
       const comments = await readApi.listComments(event.issue.number);
       const markers = comments.flatMap((comment) => {
@@ -1085,6 +576,14 @@ export function createLiveActionDependencies(input: {
             : recovery;
       }
       states.set(event.eventFingerprint, { actionLogin, ...(proposal ? { proposal } : {}) });
+      const trustedActor =
+        input.inputs.activationPolicy !== 'trusted'
+          ? false
+          : event.kind === 'issue_comment'
+            ? trustedAssociations.has(event.actor.association)
+            : ['admin', 'maintain', 'write'].includes(
+                await readApi.repositoryPermission(event.actor.login),
+              );
       return {
         actionLogin,
         activationPolicy: input.inputs.activationPolicy,
@@ -1097,9 +596,39 @@ export function createLiveActionDependencies(input: {
         lifecycleLabels: input.inputs.labels ?? defaultLifecycleLabels,
         maxModelEvents: input.inputs.maxModelEvents,
         ...(recovery ? { recovery } : {}),
-        trustedActivation: trustedAssociations.has(event.actor.association),
-        trustedReset: trustedAssociations.has(event.actor.association),
+        trustedActivation: trustedActor,
+        trustedReset: trustedActor,
       };
+    },
+    async reconcileFailure({ event, lease, reasonCode, route }) {
+      if (!/^[A-Z0-9_]{1,100}$/u.test(reasonCode)) {
+        throw new Error('FAILURE_REASON_INVALID');
+      }
+      await lease.assertCurrent();
+      const api = new FencedGitHubMutationClient(writeApi, lease);
+      await ensureEventMarker({
+        api,
+        event,
+        fencingToken: lease.fencingToken,
+        generation: route.generation,
+        kind: 'failure',
+        state: 'failed',
+      });
+      await reconcileLifecycleState({
+        api,
+        issueNumber: event.issue.number,
+        labels: input.inputs.labels,
+        replaceConflicts: true,
+        target: 'failed',
+      });
+      await ensureEventMarker({
+        api,
+        event,
+        fencingToken: lease.fencingToken,
+        generation: route.generation,
+        kind: 'complete',
+        state: 'failed',
+      });
     },
     async reconcile({ event, execution, lease, route, runtime }) {
       await lease.assertCurrent();
@@ -1130,7 +659,13 @@ export function createLiveActionDependencies(input: {
         const body = 'Conflicting triage lifecycle labels require maintainer repair.';
         assertSafeOutboundText(body);
         await api.createComment(event.issue.number, body);
-        await api.setLabels(event.issue.number, [input.inputs.labels.failed]);
+        await reconcileLifecycleState({
+          api,
+          issueNumber: event.issue.number,
+          labels: input.inputs.labels,
+          replaceConflicts: true,
+          target: 'failed',
+        });
       } else if (route.kind === 'recover') {
         if (route.recoveryKind === 'proposal') {
           if (
@@ -1146,6 +681,7 @@ export function createLiveActionDependencies(input: {
             ],
             ancillaryLabels: [],
             api,
+            confirmationRequired: !input.inputs.autoPrOnFix,
             identity,
             labels: input.inputs.labels,
             preview: { status: 'skipped', urls: [] },
@@ -1205,7 +741,13 @@ export function createLiveActionDependencies(input: {
               kind: 'failure',
               state: 'failed',
             });
-            await api.setLabels(event.issue.number, [input.inputs.labels.failed]);
+            await reconcileLifecycleState({
+              api,
+              issueNumber: event.issue.number,
+              labels: input.inputs.labels,
+              replaceConflicts: true,
+              target: 'failed',
+            });
             reasonCode = output.failureCode ?? 'TRIAGE_FAILED';
             resultState = 'failed';
           } else if (output.mutationPlan?.kind === 'publish_proposal') {
@@ -1234,12 +776,14 @@ export function createLiveActionDependencies(input: {
               issueNumber: event.issue.number,
               lease,
               fencingToken: lease.fencingToken,
-              policy: publicationPolicy(input.inputs),
+              policy: publicationPolicy(input.inputs, state.actionLogin),
               remoteUrl: `https://github.com/${event.repository.fullName}.git`,
               repository: event.repository.fullName,
               sourceRepositoryRoot,
             });
             const previewCommand = input.inputs.previewCommand;
+            const previewLaunchUrl = input.inputs.previewLaunchUrl;
+            const previewToken = input.inputs.previewToken;
             const preview = await runPreview({
               allowedHosts: input.inputs.previewAllowedHosts,
               ...(previewCommand
@@ -1259,6 +803,15 @@ export function createLiveActionDependencies(input: {
                       return parsePreviewInspectionOutput(result.stdout);
                     },
                     lease,
+                    ...(previewLaunchUrl && previewToken
+                      ? {
+                          launch: createHttpPreviewLauncher({
+                            allowedHosts: input.inputs.previewAllowedHosts,
+                            endpoint: previewLaunchUrl,
+                          }),
+                          previewCredentials: { PREVIEW_TOKEN: previewToken },
+                        }
+                      : {}),
                     publication: {
                       branch: proposal.branch,
                       confirmed: true as const,
@@ -1286,6 +839,7 @@ export function createLiveActionDependencies(input: {
                   : []),
               ],
               api,
+              confirmationRequired: !input.inputs.autoPrOnFix,
               identity,
               labels: input.inputs.labels,
               preview,
@@ -1377,9 +931,14 @@ export function createLiveActionDependencies(input: {
   };
 }
 
-function publicationPolicy(inputs: ActionInputs): PublicationPolicyDecision {
+export function publicationPolicy(
+  inputs: ActionInputs,
+  authenticatedWriteLogin: string,
+): PublicationPolicyDecision {
   return inputs.publicationTokenKind === 'github-token'
-    ? { authorized: true, kind: 'github-token', triggersDownstreamWorkflows: false }
+    ? authenticatedWriteLogin.toLowerCase() === 'github-actions[bot]'
+      ? { authorized: true, kind: 'github-token', triggersDownstreamWorkflows: false }
+      : { authorized: false, kind: 'github-token', triggersDownstreamWorkflows: false }
     : {
         authorized: inputs.allowDownstreamWorkflows && inputs.safeDownstreamCi,
         kind: 'workflow-triggering',

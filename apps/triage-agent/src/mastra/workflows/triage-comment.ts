@@ -38,8 +38,10 @@ export const triageCommentInputSchema = z
       .strict(),
     issue: z
       .object({
+        body: z.string().max(65_536),
         number: z.number().int().positive(),
         reporterLogin: z.string().min(1).max(100),
+        title: z.string().min(1).max(1_024),
       })
       .strict(),
     maxModelRetries: z.number().int().min(0).max(2).default(1),
@@ -244,8 +246,17 @@ export function createTriageCommentWorkflow(options: TriageCommentWorkflowOption
         mastra,
         now: clock,
         payload: {
-          issueNumber: inputData.issue.number,
-          proposal: canonicalProposal,
+          issue: {
+            body: inputData.issue.body,
+            number: inputData.issue.number,
+            title: inputData.issue.title,
+          },
+          proposal: {
+            branch: canonicalProposal.branch,
+            headSha: canonicalProposal.headSha,
+            id: canonicalProposal.id,
+            verificationStatus: 'verified',
+          },
         },
         phase: 'draft_pr_content',
         runInput: inputData,

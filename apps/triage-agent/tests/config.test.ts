@@ -211,6 +211,38 @@ describe('triage Action configuration', () => {
     ).not.toThrow();
   });
 
+  it('accepts only complete allowlisted preview launcher configuration', () => {
+    expect(
+      parseActionInputs({
+        ...validEnvironment,
+        INPUT_PREVIEW_ALLOWED_HOSTS: 'preview.example.com',
+        INPUT_PREVIEW_COMMAND: 'prepare-preview',
+        INPUT_PREVIEW_LAUNCH_URL: 'https://preview.example.com/api/launch',
+        INPUT_PREVIEW_TOKEN: 'preview-secret',
+      }),
+    ).toMatchObject({
+      previewAllowedHosts: ['preview.example.com'],
+      previewCommand: 'prepare-preview',
+      previewLaunchUrl: 'https://preview.example.com/api/launch',
+      previewToken: 'preview-secret',
+    });
+    expect(() =>
+      parseActionInputs({
+        ...validEnvironment,
+        INPUT_PREVIEW_LAUNCH_URL: 'https://preview.example.com/api/launch',
+      }),
+    ).toThrowError('Invalid preview launcher configuration');
+    expect(() =>
+      parseActionInputs({
+        ...validEnvironment,
+        INPUT_PREVIEW_ALLOWED_HOSTS: 'other.example.com',
+        INPUT_PREVIEW_COMMAND: 'prepare-preview',
+        INPUT_PREVIEW_LAUNCH_URL: 'https://preview.example.com/api/launch',
+        INPUT_PREVIEW_TOKEN: 'preview-secret',
+      }),
+    ).toThrowError('Invalid Action input: preview-launch-url');
+  });
+
   it('requires complete provider and elevated-publication pairs', () => {
     expect(() =>
       parseActionInputs({

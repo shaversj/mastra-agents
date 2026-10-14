@@ -57,6 +57,11 @@ export interface ActionExecution {
   state?: LifecycleState;
 }
 
+type ModelEventRoute = Extract<
+  EventRoute,
+  { kind: 'classify_fix_response' | 'classify_retriage' | 'triage' }
+>;
+
 export interface ActionResult {
   appId: typeof appMetadata.appId;
   branch?: string;
@@ -125,6 +130,12 @@ export interface ActionControllerDependencies {
     event: ProjectedGitHubEvent,
     abortSignal?: AbortSignal,
   ): Promise<RoutingSnapshot>;
+  reconcileFailure(input: {
+    event: ProjectedGitHubEvent;
+    lease: ActionLease;
+    reasonCode: string;
+    route: ModelEventRoute;
+  }): Promise<void>;
   reconcile(input: {
     abortSignal?: AbortSignal;
     event: ProjectedGitHubEvent;
@@ -229,17 +240,18 @@ function noopResult(event: ProjectedGitHubEvent, route: Extract<EventRoute, { ki
   } satisfies ActionResult;
 }
 
-function isModelRoute(
-  route: EventRoute,
-): route is Extract<
-  EventRoute,
-  { kind: 'classify_fix_response' | 'classify_retriage' | 'triage' }
-> {
+function isModelRoute(route: EventRoute): route is ModelEventRoute {
   return (
     route.kind === 'triage' ||
     route.kind === 'classify_retriage' ||
     route.kind === 'classify_fix_response'
   );
+}
+
+function unexpectedFailureReason(error: unknown): string {
+  return error instanceof Error && isSafeReasonCode(error.message)
+    ? error.message
+    : 'ACTION_FAILED';
 }
 
 function assertSafeUrl(value: string): void {
@@ -339,6 +351,7 @@ export async function runTriageAction(
   let inputs: ActionInputs | undefined;
   let lease: ActionLease | undefined;
   let runtime: ModelRuntime | undefined;
+  let startedModelRoute: ModelEventRoute | undefined;
   let result: ActionResult | undefined;
   let primaryError: unknown;
   try {
@@ -390,6 +403,10 @@ export async function runTriageAction(
       });
     }
     request.abortSignal?.throwIfAborted();
+    if (isModelRoute(route)) {
+      if (!inputs || !runtime) throw new Error('MODEL_ROUTE_RUNTIME_MISSING');
+      startedModelRoute = route;
+    }
     const execution = await dependencies.executeRoute({
       ...(request.abortSignal ? { abortSignal: request.abortSignal } : {}),
       event,
@@ -420,6 +437,18 @@ export async function runTriageAction(
     };
   } catch (error) {
     primaryError = error;
+    if (lease && startedModelRoute) {
+      try {
+        await dependencies.reconcileFailure({
+          event,
+          lease,
+          reasonCode: unexpectedFailureReason(error),
+          route: startedModelRoute,
+        });
+      } catch {
+        // Failure reconciliation is best-effort and must not hide the triggering error.
+      }
+    }
   } finally {
     try {
       await cleanupResources(runtime, lease);

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { copyFile, mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -30,7 +30,8 @@ try {
     ),
   ]);
 
-  const { stderr, stdout } = await execFileAsync(process.execPath, [join('dist', 'index.mjs')], {
+  const bundlePath = join('dist', 'index.mjs');
+  const { stderr, stdout } = await execFileAsync(process.execPath, [bundlePath], {
     cwd: fixtureRoot,
     env: {
       GITHUB_DELIVERY: 'smoke-delivery',
@@ -52,6 +53,34 @@ try {
     result.appId !== 'triage-agent'
   ) {
     throw new Error('Action bundle did not reach the expected fake-GitHub outcome');
+  }
+
+  const pullRequestEventPath = join(fixtureEventDirectory, 'pull-request.json');
+  await writeFile(
+    pullRequestEventPath,
+    JSON.stringify({ number: 42, repository: { full_name: 'example/widgets' } }),
+  );
+  const pullRequestRun = await execFileAsync(process.execPath, [bundlePath], {
+    cwd: fixtureRoot,
+    env: {
+      GITHUB_EVENT_NAME: 'pull_request',
+      GITHUB_EVENT_PATH: pullRequestEventPath,
+      GITHUB_REPOSITORY: 'example/widgets',
+      GITHUB_RUN_ID: '101',
+      GITHUB_SERVER_URL: 'https://github.com',
+      PATH: process.env.PATH,
+    },
+  });
+  if (pullRequestRun.stderr) {
+    throw new Error(`Pull-request smoke path wrote to stderr: ${pullRequestRun.stderr}`);
+  }
+  const pullRequestResult = JSON.parse(pullRequestRun.stdout) as Record<string, unknown>;
+  if (
+    pullRequestResult.status !== 'noop' ||
+    pullRequestResult.reasonCode !== 'pull_request' ||
+    pullRequestResult.appId !== 'triage-agent'
+  ) {
+    throw new Error('Action bundle did not reach the expected pull-request no-op outcome');
   }
 } finally {
   await rm(fixtureRoot, { recursive: true, force: true });

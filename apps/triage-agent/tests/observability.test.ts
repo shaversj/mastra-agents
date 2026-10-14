@@ -72,6 +72,7 @@ describe('safe Action observability', () => {
         lifecycleLabels: defaultLifecycleLabels,
         maxModelEvents: 4,
       })),
+      reconcileFailure: vi.fn(async () => undefined),
       reconcile: vi.fn(async ({ event, route }) => ({
         appId: 'triage-agent' as const,
         issueNumber: event.issue.number,

@@ -8,6 +8,9 @@ import { parseActionInputs } from '../src/action/inputs.js';
 import { runAction } from '../src/action/index.js';
 import {
   createLiveActionDependencies,
+  deleteRemoteBranchWithLease,
+  priorLeaseOwnerDiffers,
+  publicationPolicy,
   resolvePreparedDependencyPath,
   resolveProjectSkillFile,
   runRegisteredWorkflow,
@@ -88,6 +91,7 @@ function dependencies(overrides: Partial<ActionControllerDependencies> = {}) {
     })),
     loadModelInputs: vi.fn(async () => modelInputs()),
     readRoutingState: vi.fn(async () => routingSnapshot()),
+    reconcileFailure: vi.fn(async () => undefined),
     reconcile: vi.fn(async ({ event, execution: completed, route }) => ({
       appId: 'triage-agent' as const,
       issueNumber: event.issue.number,
@@ -181,7 +185,15 @@ describe('Action controller', () => {
     );
   });
 
-  it('reads a bounded newest-first comment window across pages', async () => {
+  it('queries prior workflow state when either the run ID or rerun attempt changes', () => {
+    const owner = { workflowRunAttempt: 1, workflowRunId: 100 };
+
+    expect(priorLeaseOwnerDiffers(owner, 100, 1)).toBe(false);
+    expect(priorLeaseOwnerDiffers(owner, 100, 2)).toBe(true);
+    expect(priorLeaseOwnerDiffers(owner, 101, 1)).toBe(true);
+  });
+
+  it('reads the complete bounded comment history using the server pagination links', async () => {
     const inputs = parseActionInputs({
       INPUT_READ_TOKEN: 'read-canary',
       INPUT_WRITE_TOKEN: 'write-canary',
@@ -205,7 +217,14 @@ describe('Action controller', () => {
               }))
             : [{ body: '', id: 101, user: { login: 'someone' } }];
         return new Response(JSON.stringify(comments), {
-          headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+          headers: {
+            date: 'Wed, 14 Oct 2026 12:00:00 GMT',
+            ...(page === '1'
+              ? {
+                  link: '<https://api.github.com/repos/example/widgets/issues/42/comments?per_page=100&page=2>; rel="last"',
+                }
+              : {}),
+          },
           status: 200,
         });
       }),
@@ -220,12 +239,237 @@ describe('Action controller', () => {
 
       const commentRequests = requests.filter((url) => url.includes('/comments?'));
       expect(commentRequests).toHaveLength(2);
-      expect(commentRequests[0]).toContain('sort=created&direction=desc');
       expect(commentRequests[0]).toContain('page=1');
       expect(commentRequests[1]).toContain('page=2');
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('fails closed when comment history exceeds the authoritative five-page budget', async () => {
+    const inputs = parseActionInputs({
+      INPUT_READ_TOKEN: 'read-canary',
+      INPUT_WRITE_TOKEN: 'write-canary',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (value: string | URL | Request) => {
+        const url = String(value);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'github-actions[bot]' }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), {
+          headers: {
+            date: 'Wed, 14 Oct 2026 12:00:00 GMT',
+            link: '<https://api.github.com/repos/example/widgets/issues/42/comments?per_page=100&page=6>; rel="last"',
+          },
+          status: 200,
+        });
+      }),
+    );
+    try {
+      const live = createLiveActionDependencies({
+        environment: { GITHUB_REPOSITORY: 'example/widgets' },
+        inputs,
+      });
+
+      await expect(
+        live.readRoutingState(projectGitHubEvent('issues', opened, 'delivery-long-history')),
+      ).rejects.toThrowError('COMMENT_HISTORY_INCOMPLETE');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('resolves hardened issue-event trust from the event sender repository permission', async () => {
+    const inputs = parseActionInputs({
+      INPUT_ACTIVATION_POLICY: 'trusted',
+      INPUT_READ_TOKEN: 'read-canary',
+      INPUT_WRITE_TOKEN: 'write-canary',
+    });
+    const payload = {
+      ...opened,
+      issue: {
+        ...(opened.issue as Record<string, unknown>),
+        author_association: 'OWNER',
+      },
+      sender: { id: 9001, login: 'reopener', type: 'User' },
+    };
+    let permission = 'read';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (value: string | URL | Request) => {
+        const url = String(value);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'github-actions[bot]' }), { status: 200 });
+        }
+        if (url.includes('/collaborators/reopener/permission')) {
+          return new Response(JSON.stringify({ permission }), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify([]), {
+          headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+          status: 200,
+        });
+      }),
+    );
+    try {
+      const live = createLiveActionDependencies({
+        environment: { GITHUB_REPOSITORY: 'example/widgets' },
+        inputs,
+      });
+      const event = projectGitHubEvent('issues', payload, 'delivery-hardened-sender');
+
+      await expect(live.readRoutingState(event)).resolves.toMatchObject({
+        trustedActivation: false,
+        trustedReset: false,
+      });
+      permission = 'write';
+      await expect(live.readRoutingState(event)).resolves.toMatchObject({
+        trustedActivation: true,
+        trustedReset: true,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps hardened comment-event trust bound to the comment association', async () => {
+    const inputs = parseActionInputs({
+      INPUT_ACTIVATION_POLICY: 'trusted',
+      INPUT_READ_TOKEN: 'same-token',
+      INPUT_WRITE_TOKEN: 'same-token',
+    });
+    const payload = {
+      ...commentCreated,
+      comment: {
+        ...(commentCreated.comment as Record<string, unknown>),
+        author_association: 'MEMBER',
+      },
+    };
+    const requests: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (value: string | URL | Request) => {
+        const url = String(value);
+        requests.push(url);
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'github-actions[bot]' }), { status: 200 });
+        }
+        return new Response(JSON.stringify([]), {
+          headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+          status: 200,
+        });
+      }),
+    );
+    try {
+      const live = createLiveActionDependencies({
+        environment: { GITHUB_REPOSITORY: 'example/widgets' },
+        inputs,
+      });
+      await expect(
+        live.readRoutingState(
+          projectGitHubEvent('issue_comment', payload, 'delivery-trusted-comment'),
+        ),
+      ).resolves.toMatchObject({ trustedActivation: true, trustedReset: true });
+      expect(requests.some((url) => url.includes('/collaborators/'))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('binds the default publication policy to the GitHub Actions bot identity', () => {
+    const defaults = parseActionInputs({
+      INPUT_READ_TOKEN: 'read-canary',
+      INPUT_WRITE_TOKEN: 'write-canary',
+    });
+    const elevated = parseActionInputs({
+      INPUT_ALLOW_DOWNSTREAM_WORKFLOWS: 'true',
+      INPUT_PUBLICATION_TOKEN_KIND: 'workflow-triggering',
+      INPUT_READ_TOKEN: 'read-canary',
+      INPUT_SAFE_DOWNSTREAM_CI: 'true',
+      INPUT_WRITE_TOKEN: 'write-canary',
+    });
+
+    expect(publicationPolicy(defaults, 'github-actions[bot]')).toEqual({
+      authorized: true,
+      kind: 'github-token',
+      triggersDownstreamWorkflows: false,
+    });
+    expect(publicationPolicy(defaults, 'maintainer')).toEqual({
+      authorized: false,
+      kind: 'github-token',
+      triggersDownstreamWorkflows: false,
+    });
+    expect(publicationPolicy(defaults, 'custom-app[bot]')).toEqual({
+      authorized: false,
+      kind: 'github-token',
+      triggersDownstreamWorkflows: false,
+    });
+    expect(publicationPolicy(elevated, 'custom-app[bot]')).toEqual({
+      authorized: true,
+      kind: 'workflow-triggering',
+      triggersDownstreamWorkflows: true,
+    });
+  });
+
+  it('denies a self-declared default token before routing when its identity is not GitHub Actions', async () => {
+    const inputs = parseActionInputs({
+      INPUT_READ_TOKEN: 'human-token',
+      INPUT_WRITE_TOKEN: 'human-token',
+    });
+    const requests: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (value: string | URL | Request) => {
+        requests.push(String(value));
+        return new Response(JSON.stringify({ login: 'maintainer' }), { status: 200 });
+      }),
+    );
+    try {
+      const live = createLiveActionDependencies({
+        environment: { GITHUB_REPOSITORY: 'example/widgets' },
+        inputs,
+      });
+
+      await expect(
+        live.readRoutingState(projectGitHubEvent('issues', opened, 'delivery-human-default-token')),
+      ).rejects.toThrowError('PUBLICATION_POLICY_DENIED');
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatch(/\/user$/u);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('atomically rejects branch deletion when the remote head moved after discovery', async () => {
+    const expectedSha = 'a'.repeat(40);
+    let remoteHead = expectedSha;
+    remoteHead = 'b'.repeat(40);
+    const execute = vi.fn(async (_file: string, args: readonly string[]) => {
+      const lease = args.find((value) => value.startsWith('--force-with-lease='));
+      if (remoteHead !== expectedSha || !lease?.endsWith(`:${expectedSha}`)) {
+        throw new Error('stale info');
+      }
+      return { stderr: '', stdout: '' };
+    });
+
+    await expect(
+      deleteRemoteBranchWithLease({
+        branch: 'triagebot/fix-42',
+        execute,
+        expectedSha,
+        remoteUrl: 'https://github.com/example/widgets.git',
+        token: 'write-canary',
+      }),
+    ).rejects.toThrowError('PROPOSAL_BRANCH_DELETE_FAILED');
+    expect(execute).toHaveBeenCalledOnce();
+    const args = execute.mock.calls[0]?.[1] ?? [];
+    expect(args).toContain(`--force-with-lease=refs/heads/triagebot/fix-42:${expectedSha}`);
+    expect(args).toContain(':refs/heads/triagebot/fix-42');
+    expect(args).not.toContain('write-canary');
   });
 
   it('boundedly discovers every configured repository label before model setup', async () => {
@@ -498,8 +742,12 @@ describe('Action controller', () => {
   it('runs full triage in the same generation after actionable retriage classification', async () => {
     const inputs = modelInputs();
     const workflowIds: string[] = [];
-    const runWorkflow = vi.fn(async (_mastra: unknown, workflowId: string) => {
+    let commentInput: unknown;
+    let retriageInput: unknown;
+    const runWorkflow = vi.fn(async (_mastra: unknown, workflowId: string, inputData: unknown) => {
       workflowIds.push(workflowId);
+      if (workflowId === 'triage-comment-workflow') commentInput = inputData;
+      if (workflowId === 'triage-workflow') retriageInput = inputData;
       return workflowId === 'triage-comment-workflow'
         ? {
             action: 'rerun_triage',
@@ -575,7 +823,112 @@ describe('Action controller', () => {
       });
 
       expect(workflowIds).toEqual(['triage-comment-workflow', 'triage-workflow']);
+      expect(commentInput).toMatchObject({
+        issue: {
+          body: event.issue.body,
+          number: event.issue.number,
+          reporterLogin: event.issue.reporterLogin,
+          title: event.issue.title,
+        },
+      });
+      expect(retriageInput).toMatchObject({
+        triggeringComment: {
+          body: 'You can reproduce this with npm test -- widget.',
+          id: 5001,
+        },
+      });
       expect(result).toMatchObject({ reasonCode: 'TRIAGE_OUTCOME', state: 'not_actionable' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('idempotently reconciles unexpected model failures with fenced markers and preserved labels', async () => {
+    const inputs = parseActionInputs({
+      INPUT_READ_TOKEN: 'same-token',
+      INPUT_WRITE_TOKEN: 'same-token',
+    });
+    const event = projectGitHubEvent('issues', opened, 'delivery-model-failure');
+    const comments: Array<{ body: string; id: number; user: { login: string } }> = [];
+    let labels = [
+      'customer-reported',
+      defaultLifecycleLabels.needs_triage,
+      defaultLifecycleLabels.fix_pending,
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (value: string | URL | Request, init?: RequestInit) => {
+        const url = String(value);
+        const method = init?.method ?? 'GET';
+        if (url.endsWith('/user')) {
+          return new Response(JSON.stringify({ login: 'github-actions[bot]' }), { status: 200 });
+        }
+        if (url.includes('/comments') && method === 'GET') {
+          return new Response(JSON.stringify(comments), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        if (url.includes('/comments') && method === 'POST') {
+          const body = String((JSON.parse(String(init?.body)) as { body: string }).body);
+          const comment = {
+            body,
+            id: comments.length + 1,
+            user: { login: 'github-actions[bot]' },
+          };
+          comments.push(comment);
+          return new Response(JSON.stringify(comment), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        if (url.endsWith(`/issues/${event.issue.number}`) && method === 'GET') {
+          return new Response(JSON.stringify({ labels: labels.map((name) => ({ name })) }), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        if (url.endsWith(`/issues/${event.issue.number}/labels`) && method === 'PUT') {
+          labels = (JSON.parse(String(init?.body)) as { labels: string[] }).labels;
+          return new Response(JSON.stringify(labels.map((name) => ({ name }))), {
+            headers: { date: 'Wed, 14 Oct 2026 12:00:00 GMT' },
+            status: 200,
+          });
+        }
+        throw new Error(`Unexpected request: ${method} ${url}`);
+      }),
+    );
+    try {
+      const live = createLiveActionDependencies({
+        environment: { GITHUB_REPOSITORY: event.repository.fullName },
+        inputs,
+      });
+      await live.readRoutingState(event);
+      const lease = {
+        assertCurrent: vi.fn(async () => undefined),
+        fencingToken: 'fence-failure',
+        release: async () => undefined,
+      };
+      const failure = {
+        event,
+        lease,
+        reasonCode: 'ACTION_FAILED',
+        route: {
+          eventFingerprint: event.eventFingerprint,
+          generation: 1,
+          kind: 'triage' as const,
+          resetBudgets: false,
+        },
+      };
+
+      await live.reconcileFailure(failure);
+      await live.reconcileFailure(failure);
+
+      expect(labels).toEqual([defaultLifecycleLabels.failed, 'customer-reported']);
+      expect(
+        comments.map(({ body }) => decodeMarker(body, { authorIsAction: true })?.kind),
+      ).toEqual(['failure', 'complete']);
+      expect(lease.assertCurrent).toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -588,12 +941,14 @@ describe('Action controller', () => {
       GITHUB_EVENT_PATH: new URL('./fixtures/events/issue-opened.json', import.meta.url).pathname,
       GITHUB_RUN_ID: '100',
       INPUT_ANTHROPIC_API_KEY: 'provider-canary',
+      INPUT_PREVIEW_TOKEN: 'preview-canary',
       INPUT_READ_TOKEN: 'read-canary',
       INPUT_WRITE_TOKEN: 'write-canary',
     };
     const setup = dependencies({
       readRoutingState: vi.fn(async (event) => {
         expect(environment.INPUT_ANTHROPIC_API_KEY).toBeUndefined();
+        expect(environment.INPUT_PREVIEW_TOKEN).toBeUndefined();
         expect(environment.INPUT_READ_TOKEN).toBeUndefined();
         expect(environment.INPUT_WRITE_TOKEN).toBeUndefined();
         return routingSnapshot({
@@ -613,7 +968,86 @@ describe('Action controller', () => {
       stdout: { write: (chunk) => ((output += String(chunk)), true) },
     });
 
-    expect(output).not.toMatch(/provider-canary|read-canary|write-canary/u);
+    expect(output).not.toMatch(/provider-canary|preview-canary|read-canary|write-canary/u);
+  });
+
+  it('returns a safe pull-request transport no-op without constructing dependencies', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'triage-pull-request-noop-'));
+    try {
+      const eventPath = join(root, 'event.json');
+      const outputPath = join(root, 'output.txt');
+      const summaryPath = join(root, 'summary.md');
+      await writeFile(
+        eventPath,
+        JSON.stringify({
+          number: 42,
+          repository: (opened as { repository: unknown }).repository,
+        }),
+      );
+      const setup = dependencies();
+
+      const result = await runAction(
+        {
+          GITHUB_EVENT_NAME: 'pull_request',
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_OUTPUT: outputPath,
+          GITHUB_RUN_ID: '100',
+          GITHUB_SERVER_URL: 'https://github.com',
+          GITHUB_REPOSITORY: 'example/widgets',
+          GITHUB_STEP_SUMMARY: summaryPath,
+        },
+        {
+          dependencies: setup.value,
+          stdout: { write: () => true },
+        },
+      );
+
+      expect(result).toMatchObject({
+        issueNumber: 42,
+        reasonCode: 'pull_request',
+        repository: 'example/widgets',
+        route: 'noop',
+        status: 'noop',
+      });
+      await expect(readFile(outputPath, 'utf8')).resolves.toContain('reason-code=pull_request');
+      await expect(readFile(summaryPath, 'utf8')).resolves.toContain('- Status: noop');
+      expect(setup.value.readRoutingState).not.toHaveBeenCalled();
+      expect(setup.value.loadModelInputs).not.toHaveBeenCalled();
+      expect(setup.value.acquireLease).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it('keeps fallback delivery identity stable across workflow rerun attempts', async () => {
+    const deliveryIds: string[] = [];
+    const setup = dependencies({
+      readRoutingState: vi.fn(async (event) => {
+        deliveryIds.push(event.deliveryId);
+        return routingSnapshot({
+          ledger: {
+            failureCount: 0,
+            generation: 0,
+            modelEventCount: 0,
+            processedEventFingerprints: [event.eventFingerprint],
+          },
+        });
+      }),
+    });
+    const baseEnvironment = {
+      GITHUB_EVENT_NAME: 'issues',
+      GITHUB_EVENT_PATH: new URL('./fixtures/events/issue-opened.json', import.meta.url).pathname,
+      GITHUB_RUN_ID: '100',
+    };
+
+    for (const attempt of ['1', '2']) {
+      await runAction(
+        { ...baseEnvironment, GITHUB_RUN_ATTEMPT: attempt },
+        { dependencies: setup.value, stdout: { write: () => true } },
+      );
+    }
+
+    expect(deliveryIds).toEqual(['workflow-run:100', 'workflow-run:100']);
   });
 
   it('returns a duplicate event no-op before model, lease, or mutation capabilities are used', async () => {
@@ -739,6 +1173,7 @@ describe('Action controller', () => {
     expect(setup.value.loadModelInputs).not.toHaveBeenCalled();
     expect(setup.value.acquireLease).not.toHaveBeenCalled();
     expect(setup.value.executeRoute).not.toHaveBeenCalled();
+    expect(setup.value.reconcileFailure).not.toHaveBeenCalled();
     expect(setup.value.reconcile).not.toHaveBeenCalled();
   });
 
@@ -759,7 +1194,53 @@ describe('Action controller', () => {
 
     expect(setup.value.acquireLease).not.toHaveBeenCalled();
     expect(setup.value.executeRoute).not.toHaveBeenCalled();
+    expect(setup.value.reconcileFailure).not.toHaveBeenCalled();
     expect(setup.value.reconcile).not.toHaveBeenCalled();
+  });
+
+  it('reconciles one fenced failure after unexpected model execution errors', async () => {
+    const reconcileFailure = vi.fn(async () => undefined);
+    const setup = dependencies({
+      executeRoute: vi.fn(async () => {
+        throw new Error('MODEL_OUTPUT_CANARY unsafe detail');
+      }),
+      reconcileFailure,
+    });
+
+    await expect(runTriageAction(request(), setup.value)).rejects.toThrowError(
+      'MODEL_OUTPUT_CANARY unsafe detail',
+    );
+
+    expect(reconcileFailure).toHaveBeenCalledOnce();
+    expect(reconcileFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lease: setup.lease,
+        reasonCode: 'ACTION_FAILED',
+        route: expect.objectContaining({ kind: 'triage' }),
+      }),
+    );
+    expect(setup.value.reconcile).not.toHaveBeenCalled();
+    expect(setup.runtime.close).toHaveBeenCalledOnce();
+    expect(setup.lease.release).toHaveBeenCalledOnce();
+  });
+
+  it('does not count model-runtime setup failures against the failure budget', async () => {
+    const reconcileFailure = vi.fn(async () => undefined);
+    const setup = dependencies({
+      createModelRuntime: vi.fn(async () => {
+        throw new Error('MODEL_RUNTIME_SETUP_FAILED');
+      }),
+      reconcileFailure,
+    });
+
+    await expect(runTriageAction(request(), setup.value)).rejects.toThrowError(
+      'MODEL_RUNTIME_SETUP_FAILED',
+    );
+
+    expect(reconcileFailure).not.toHaveBeenCalled();
+    expect(setup.value.executeRoute).not.toHaveBeenCalled();
+    expect(setup.value.reconcile).not.toHaveBeenCalled();
+    expect(setup.lease.release).toHaveBeenCalledOnce();
   });
 
   it('fails closed when reconciliation returns unbounded model-derived output', async () => {

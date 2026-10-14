@@ -43,6 +43,22 @@ describe('GitHub event projection and lifecycle routing', () => {
     expect(event.eventFingerprint).toBe('issue_comment:created:1001:2001:5001:delivery-1');
   });
 
+  it('does not project an issue author association onto a different event sender', () => {
+    const payload = fixture('issue-reopened') as Record<string, unknown>;
+    const issue = payload.issue as Record<string, unknown>;
+    const event = projectGitHubEvent(
+      'issues',
+      {
+        ...payload,
+        issue: { ...issue, author_association: 'OWNER' },
+        sender: { id: 9001, login: 'reopener', type: 'User' },
+      },
+      'delivery-reopened-by-other',
+    );
+
+    expect(event.actor).toMatchObject({ association: 'NONE', id: 9001, login: 'reopener' });
+  });
+
   it('selects the triggering comment instead of a later API result', () => {
     const selected = selectCommentWindow(
       [

@@ -111,6 +111,7 @@ export function renderTriageReport(input: {
 export function renderProposalComment(input: {
   allowedPreviewHosts: readonly string[];
   branch: string;
+  confirmationRequired?: boolean;
   headSha: string;
   preview: {
     reasonCode?: string;
@@ -127,7 +128,13 @@ export function renderProposalComment(input: {
     `Branch: \`${input.branch}\``,
     `Commit: \`${input.headSha}\``,
     '',
-    `Test the exact branch and commit above, then confirm or reject \`${input.proposalId}\`.`,
+    ...(input.confirmationRequired === false
+      ? [
+          'Automatic pull-request mode is enabled, so the confirmation step is bypassed for this exact proposal.',
+        ]
+      : [
+          `Test the exact branch and commit above, then confirm or reject \`${input.proposalId}\`.`,
+        ]),
   ];
   if (input.report) lines.push('', ...reportLines(input.report));
   if (input.preview.status === 'ready') {

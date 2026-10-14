@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { parsePreviewInspectionOutput, runPreview } from '../src/preview/run-preview.js';
+import {
+  createHttpPreviewLauncher,
+  parsePreviewInspectionOutput,
+  runPreview,
+} from '../src/preview/run-preview.js';
 
 const metadata = {
   branch: 'triagebot/fix-42',
@@ -86,6 +90,131 @@ describe('preview boundary', () => {
       metadata,
     });
     expect(launch.mock.calls[0]?.[0]).not.toHaveProperty('workspaceRoot');
+  });
+
+  it('posts only bounded metadata and a preview-scoped credential to the HTTP launcher', async () => {
+    const request = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body).toEqual({ artifactId: 'artifact-1', metadata });
+      expect(JSON.stringify(body)).not.toMatch(/workspace|github|provider/iu);
+      expect(init?.headers).toEqual({
+        Accept: 'application/json',
+        Authorization: 'Bearer preview-only',
+        'Content-Type': 'application/json',
+        'User-Agent': 'mastra-triage-agent-preview',
+      });
+      return new Response(
+        JSON.stringify({ status: 'ready', urls: ['https://preview.example.com/build/42'] }),
+        { headers: { 'content-type': 'application/json' }, status: 200 },
+      );
+    });
+    const launch = createHttpPreviewLauncher({
+      allowedHosts: ['preview.example.com'],
+      endpoint: 'https://preview.example.com/api/launch',
+      fetch: request as typeof fetch,
+    });
+
+    await expect(
+      runPreview({
+        allowedHosts: ['preview.example.com'],
+        inspectChangedCode: async () => ({ artifactId: 'artifact-1' }),
+        launch,
+        lease: { assertCurrent: async () => undefined },
+        metadata,
+        previewCredentials: { PREVIEW_TOKEN: 'preview-only' },
+        publication,
+        workspaceRoot: '/untrusted/checkout',
+      }),
+    ).resolves.toEqual({
+      status: 'ready',
+      urls: ['https://preview.example.com/build/42'],
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('rejects unbounded launcher metadata before making a network request', async () => {
+    const request = vi.fn();
+    const launch = createHttpPreviewLauncher({
+      allowedHosts: ['preview.example.com'],
+      endpoint: 'https://preview.example.com/api/launch',
+      fetch: request as typeof fetch,
+    });
+
+    await expect(
+      launch({
+        artifactId: 'artifact-1',
+        credentials: { PREVIEW_TOKEN: 'preview-only' },
+        metadata: { ...metadata, branch: 'x'.repeat(256) },
+      }),
+    ).rejects.toThrowError('PREVIEW_CONFIGURATION_INVALID');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized or non-JSON HTTP launcher responses', async () => {
+    const launch = (body: string, contentType = 'application/json') =>
+      createHttpPreviewLauncher({
+        allowedHosts: ['preview.example.com'],
+        endpoint: 'https://preview.example.com/api/launch',
+        fetch: vi.fn(
+          async () => new Response(body, { headers: { 'content-type': contentType }, status: 200 }),
+        ) as typeof fetch,
+      });
+    const configured = {
+      allowedHosts: ['preview.example.com'],
+      inspectChangedCode: async () => ({ artifactId: 'artifact-1' }),
+      lease: { assertCurrent: async () => undefined },
+      metadata,
+      previewCredentials: { PREVIEW_TOKEN: 'preview-only' },
+      publication,
+      workspaceRoot: '/untrusted/checkout',
+    };
+
+    await expect(
+      runPreview({ ...configured, launch: launch('x'.repeat(8_193)) }),
+    ).resolves.toMatchObject({ reasonCode: 'PREVIEW_LAUNCH_FAILED', status: 'failed' });
+    await expect(
+      runPreview({ ...configured, launch: launch('{}', 'text/plain') }),
+    ).resolves.toMatchObject({ reasonCode: 'PREVIEW_LAUNCH_FAILED', status: 'failed' });
+  });
+
+  it('stops reading a chunked launcher response once it exceeds the byte ceiling', async () => {
+    let cancelled = false;
+    let pulls = 0;
+    const responseBody = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array(4_097));
+      },
+    });
+    const launch = createHttpPreviewLauncher({
+      allowedHosts: ['preview.example.com'],
+      endpoint: 'https://preview.example.com/api/launch',
+      fetch: vi.fn(
+        async () =>
+          new Response(responseBody, {
+            headers: { 'content-type': 'application/json' },
+            status: 200,
+          }),
+      ) as typeof fetch,
+    });
+
+    await expect(
+      runPreview({
+        allowedHosts: ['preview.example.com'],
+        inspectChangedCode: async () => ({ artifactId: 'artifact-1' }),
+        launch,
+        lease: { assertCurrent: async () => undefined },
+        metadata,
+        previewCredentials: { PREVIEW_TOKEN: 'preview-only' },
+        publication,
+        workspaceRoot: '/untrusted/checkout',
+      }),
+    ).resolves.toMatchObject({ reasonCode: 'PREVIEW_LAUNCH_FAILED', status: 'failed' });
+    expect(cancelled).toBe(true);
+    expect(pulls).toBeGreaterThanOrEqual(2);
   });
 
   it('runs inspection without a launcher and returns a bounded nonfatal failure', async () => {

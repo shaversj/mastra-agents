@@ -85,6 +85,7 @@ export function decideLeaseAcquisition(input: {
   candidate: LeaseRecord;
   current: LeaseRecord | null;
   maxApiTimeoutMs?: number;
+  priorRunTerminalAt?: string;
   priorRunStatus?: WorkflowRunStatus;
   serverNow: string;
   toleratedClockSkewMs?: number;
@@ -106,13 +107,18 @@ export function decideLeaseAcquisition(input: {
   }
 
   const terminal = input.priorRunStatus && terminalStatuses.has(input.priorRunStatus);
-  if (!terminal) return { kind: 'contended', ownerWorkflowRunId: input.current.workflowRunId };
+  if (!terminal || !input.priorRunTerminalAt) {
+    return { kind: 'contended', ownerWorkflowRunId: input.current.workflowRunId };
+  }
 
   const maxApiTimeoutMs = input.maxApiTimeoutMs ?? 0;
   const toleratedClockSkewMs = input.toleratedClockSkewMs ?? 0;
   if (maxApiTimeoutMs < 0 || toleratedClockSkewMs < 0) throw new Error('LEASE_GRACE_INVALID');
-  const takeoverAt =
-    timestamp(input.current.expiresAt, 'EXPIRY') + maxApiTimeoutMs + toleratedClockSkewMs;
+  const terminalAt = timestamp(input.priorRunTerminalAt, 'TERMINAL_TIME');
+  if (terminalAt < timestamp(input.current.acquiredAt, 'ACQUIRED_AT')) {
+    throw new Error('LEASE_TERMINAL_TIME_INVALID');
+  }
+  const takeoverAt = terminalAt + maxApiTimeoutMs + toleratedClockSkewMs;
   if (now < takeoverAt) {
     return { eligibleAt: new Date(takeoverAt).toISOString(), kind: 'takeover_pending' };
   }
