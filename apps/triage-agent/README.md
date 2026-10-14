@@ -139,6 +139,10 @@ pnpm --filter @mastra-agents/triage-agent --fail-if-no-match run eval:fixtures
 pnpm --filter @mastra-agents/triage-agent --fail-if-no-match run artifact:smoke
 ```
 
+The app check includes the live Docker security-boundary test. CI runs that test in a dedicated,
+single-worker step so a failure identifies the exact security probe and reports only sanitized
+container running, exit, and OOM state.
+
 The registered `triage-release-gate/v1` scorer checks lifecycle transitions, evidence provenance, actor and SHA binding, branch scope, idempotency, publication credentials, and the no-merge/default-write policy. Paid live experiments are separate and explicit:
 
 ```sh

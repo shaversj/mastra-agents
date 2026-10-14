@@ -97,9 +97,22 @@ jobs:
         run: docker version
 
       - name: Validate selected application
+        if: matrix.app != 'triage-agent'
         env:
           PACKAGE_NAME: ${{ matrix.packageName }}
         run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run check
+
+      - name: Validate triage application
+        if: matrix.app == 'triage-agent'
+        env:
+          PACKAGE_NAME: ${{ matrix.packageName }}
+        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run check:base
+
+      - name: Verify triage Docker security boundary
+        if: matrix.app == 'triage-agent'
+        env:
+          PACKAGE_NAME: ${{ matrix.packageName }}
+        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run test:docker
 
       - name: Install Node.js for triage Action smoke
         if: matrix.app == 'triage-agent'
