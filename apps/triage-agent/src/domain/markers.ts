@@ -19,7 +19,7 @@ const markerSchema = z.object({
   fencingToken: z.string().min(1).max(200),
   generation: z.number().int().nonnegative(),
   issueNumber: z.number().int().positive(),
-  kind: z.enum(['failure', 'model_event', 'proposal', 'report', 'reset', 'transition']),
+  kind: z.enum(['complete', 'failure', 'model_event', 'proposal', 'report', 'reset', 'transition']),
   proposal: proposalSchema.optional(),
   repository: z
     .string()
@@ -84,7 +84,11 @@ export function summarizeAttemptLedger(
     generation,
     modelEventCount: generationMarkers.filter(({ kind }) => kind === 'model_event').length,
     processedEventFingerprints: [
-      ...new Set(markers.map(({ eventFingerprint }) => eventFingerprint)),
+      ...new Set(
+        markers
+          .filter(({ kind }) => kind === 'complete')
+          .map(({ eventFingerprint }) => eventFingerprint),
+      ),
     ],
   };
 }
@@ -113,7 +117,8 @@ export function reconcileMarkers(
 ): MarkerReconciliation {
   if (expected.eventFingerprint) {
     const duplicate = markers.find(
-      ({ eventFingerprint }) => eventFingerprint === expected.eventFingerprint,
+      ({ eventFingerprint, kind }) =>
+        kind === 'complete' && eventFingerprint === expected.eventFingerprint,
     );
     if (duplicate) return { kind: 'duplicate_event', marker: duplicate };
   }

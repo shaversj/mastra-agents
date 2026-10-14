@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { runPreview } from '../src/preview/run-preview.js';
+import { parsePreviewInspectionOutput, runPreview } from '../src/preview/run-preview.js';
 
 const metadata = {
   branch: 'triagebot/fix-42',
@@ -10,6 +10,20 @@ const metadata = {
 const publication = { branch: metadata.branch, confirmed: true as const, headSha: metadata.sha };
 
 describe('preview boundary', () => {
+  it('accepts only bounded strict inspection JSON without reflecting output', () => {
+    expect(parsePreviewInspectionOutput('{"artifactId":"artifact-1"}')).toEqual({
+      artifactId: 'artifact-1',
+    });
+    expect(() => parsePreviewInspectionOutput('{"artifactId":"ok","secret":"CANARY"}')).toThrow(
+      'PREVIEW_INSPECTION_INVALID',
+    );
+    expect(() => parsePreviewInspectionOutput('not-json CANARY')).toThrow(
+      'PREVIEW_INSPECTION_INVALID',
+    );
+    expect(() => parsePreviewInspectionOutput('x'.repeat(8_193))).toThrow(
+      'PREVIEW_INSPECTION_INVALID',
+    );
+  });
   it('treats absent configuration and launcher failure as nonfatal', async () => {
     await expect(runPreview({ allowedHosts: [], metadata })).resolves.toEqual({
       status: 'skipped',
@@ -72,6 +86,34 @@ describe('preview boundary', () => {
       metadata,
     });
     expect(launch.mock.calls[0]?.[0]).not.toHaveProperty('workspaceRoot');
+  });
+
+  it('runs inspection without a launcher and returns a bounded nonfatal failure', async () => {
+    const inspectChangedCode = vi.fn(async (context) => {
+      expect(context).toEqual({
+        environment: {},
+        network: false,
+        workspaceRoot: '/isolated/workspace',
+      });
+      expect(JSON.stringify(context)).not.toContain('PROVIDER_CANARY');
+      return { artifactId: 'artifact-1' };
+    });
+
+    await expect(
+      runPreview({
+        allowedHosts: [],
+        inspectChangedCode,
+        lease: { assertCurrent: async () => undefined },
+        metadata,
+        publication,
+        workspaceRoot: '/isolated/workspace',
+      }),
+    ).resolves.toEqual({
+      reasonCode: 'PREVIEW_CONFIGURATION_INVALID',
+      status: 'failed',
+      urls: [],
+    });
+    expect(inspectChangedCode).toHaveBeenCalledOnce();
   });
 
   it.each([

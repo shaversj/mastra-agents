@@ -28,6 +28,7 @@ const input = {
   allowedPackageLabels: ['pkg:core'],
   allowedPriorityLabels: ['priority:high'],
   attemptId: 'attempt-1',
+  autoPrOnFix: false,
   eventFingerprint: 'issues:opened:1:2:delivery-1',
   generation: 1,
   issue: {
@@ -49,8 +50,11 @@ const input = {
 async function runTriage(script: Script) {
   const model = scriptedModel(script);
   const workflow = createTriageWorkflow({
+    admitChanges: async () => true,
     collectEvidence: async ({ phase }) => [
-      { kind: 'model_stage', phase, status: 'observed' as const },
+      phase === 'verify'
+        ? { kind: 'test', phase, status: 'passed' as const }
+        : { kind: 'model_stage', phase, status: 'observed' as const },
     ],
     invokeModel: model.invoke,
   });
@@ -80,6 +84,10 @@ describe('triage workflow', () => {
     const script: Script = {
       reproduce: { decision: 'continue' },
       diagnose: { decision: 'continue' },
+      draft_report: {
+        details: ['The issue reached a bounded triage outcome.'],
+        headline: 'Triage complete',
+      },
       verify: { decision: 'continue' },
       fix: { decision: 'continue' },
     };
@@ -89,29 +97,33 @@ describe('triage workflow', () => {
 
     expect(result.status).toBe('success');
     if (result.status === 'success') {
-      expect(result.result).toMatchObject({ state, stoppedAt: phase });
+      expect(result.result).toMatchObject({
+        mutationPlan: {
+          kind: 'triage_outcome',
+          report: { headline: 'Triage complete' },
+        },
+        state,
+        stoppedAt: phase,
+      });
       expect(result.result.evidence).toEqual(
         expect.arrayContaining([expect.objectContaining({ phase })]),
       );
     }
     const order = ['reproduce', 'diagnose', 'verify', 'fix'];
-    expect(calls.map(({ phase: called }) => called)).toEqual(
-      order.slice(0, order.indexOf(phase) + 1),
-    );
+    expect(calls.map(({ phase: called }) => called)).toEqual([
+      ...order.slice(0, order.indexOf(phase) + 1),
+      'draft_report',
+    ]);
+    expect(calls.at(-1)).toMatchObject({ activeTools: [], phase: 'draft_report' });
   });
 
   it('admits a verified proposal only after evidence and deterministic admission', async () => {
-    const proposal = {
-      baseSha: 'a'.repeat(40),
-      branch: 'triagebot/fix-42',
-      headSha: 'b'.repeat(40),
-    };
     const { calls, result } = await runTriage({
       reproduce: { decision: 'continue' },
       diagnose: { decision: 'continue' },
       verify: { decision: 'continue' },
-      fix: { decision: 'verified_fix', proposal },
-      classify_outcome: { decision: 'verified_fix', proposal },
+      fix: { decision: 'verified_fix' },
+      classify_outcome: { decision: 'verified_fix' },
       draft_report: { headline: 'A verified fix is ready', details: ['Run the reported command.'] },
       select_labels: { packageLabels: ['pkg:core'], priorityLabel: 'priority:high' },
     });
@@ -120,13 +132,137 @@ describe('triage workflow', () => {
     if (result.status === 'success') {
       expect(result.result).toMatchObject({
         state: 'fix_pending',
-        proposal: proposalIdentity(proposal),
+        mutationPlan: expect.objectContaining({ kind: 'publish_proposal' }),
         stoppedAt: 'admission',
       });
     }
     for (const phase of ['classify_outcome', 'draft_report', 'select_labels']) {
       expect(calls.find((call) => call.phase === phase)).toMatchObject({
         activeTools: [],
+      });
+    }
+  });
+
+  it('drafts tool-less PR content only when automatic PR creation is selected', async () => {
+    const model = scriptedModel({
+      reproduce: { decision: 'continue' },
+      diagnose: { decision: 'continue' },
+      verify: { decision: 'continue' },
+      fix: { decision: 'verified_fix' },
+      classify_outcome: { decision: 'verified_fix' },
+      draft_report: { headline: 'A verified fix is ready', details: ['Run the reported command.'] },
+      select_labels: { packageLabels: ['pkg:core'], priorityLabel: 'priority:high' },
+      draft_pr_content: { bodyFields: ['Fixes the failure.'], title: 'Fix command failure' },
+    });
+    const workflow = createTriageWorkflow({
+      admitChanges: async () => true,
+      collectEvidence: async ({ phase }) => [
+        phase === 'verify'
+          ? { kind: 'test', phase, status: 'passed' as const }
+          : { kind: 'model_stage', phase, status: 'observed' as const },
+      ],
+      invokeModel: model.invoke,
+      prSkill: 'pr-skill',
+    });
+    const mastra = new Mastra({ workflows: { [appMetadata.workflowIds.triage]: workflow } });
+    const run = await mastra.getWorkflow(appMetadata.workflowIds.triage).createRun();
+    const result = await run.start({ inputData: { ...input, autoPrOnFix: true } });
+
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.result.mutationPlan).toMatchObject({
+        kind: 'publish_proposal',
+        prContent: { title: 'Fix command failure' },
+      });
+    }
+    expect(model.calls.find(({ phase }) => phase === 'draft_pr_content')).toMatchObject({
+      activeTools: [],
+      skill: 'pr-skill',
+    });
+  });
+
+  it('rejects model-provided branch identity and defaults admission to fail closed', async () => {
+    const workflow = createTriageWorkflow({
+      collectEvidence: async ({ phase }) => [
+        phase === 'verify'
+          ? { kind: 'test', phase, status: 'passed' as const }
+          : { kind: 'model_stage', phase, status: 'observed' as const },
+      ],
+      invokeModel: scriptedModel({
+        reproduce: { decision: 'continue' },
+        diagnose: { decision: 'continue' },
+        verify: { decision: 'continue' },
+        fix: {
+          decision: 'verified_fix',
+          proposal: {
+            baseSha: 'a'.repeat(40),
+            branch: 'triagebot/fix-42',
+            headSha: 'b'.repeat(40),
+          },
+        },
+      }).invoke,
+    });
+    const mastra = new Mastra({ workflows: { [appMetadata.workflowIds.triage]: workflow } });
+    const run = await mastra.getWorkflow(appMetadata.workflowIds.triage).createRun();
+    const rejectedIdentity = await run.start({ inputData: input });
+
+    expect(rejectedIdentity.status).toBe('success');
+    if (rejectedIdentity.status === 'success') {
+      expect(rejectedIdentity.result).toMatchObject({
+        failureCode: 'MALFORMED_STRUCTURED_OUTPUT',
+        mutationPlan: null,
+      });
+    }
+
+    const noAdmission = createTriageWorkflow({
+      collectEvidence: async ({ phase }) => [
+        phase === 'verify'
+          ? { kind: 'test', phase, status: 'passed' as const }
+          : { kind: 'model_stage', phase, status: 'observed' as const },
+      ],
+      invokeModel: scriptedModel({
+        reproduce: { decision: 'continue' },
+        diagnose: { decision: 'continue' },
+        verify: { decision: 'continue' },
+        fix: { decision: 'verified_fix' },
+        classify_outcome: { decision: 'verified_fix' },
+      }).invoke,
+    });
+    const noAdmissionMastra = new Mastra({ workflows: { workflow: noAdmission } });
+    const noAdmissionRun = await noAdmissionMastra.getWorkflow('workflow').createRun();
+    const rejectedAdmission = await noAdmissionRun.start({ inputData: input });
+    expect(rejectedAdmission.status).toBe('success');
+    if (rejectedAdmission.status === 'success') {
+      expect(rejectedAdmission.result).toMatchObject({
+        failureCode: 'ADMISSION_REJECTED',
+        mutationPlan: null,
+      });
+    }
+  });
+
+  it('rejects a verified fix without passed trusted verification evidence', async () => {
+    const workflow = createTriageWorkflow({
+      admitChanges: async () => true,
+      collectEvidence: async ({ phase }) => [
+        { kind: 'command', phase, status: phase === 'verify' ? 'failed' : 'passed' },
+      ],
+      invokeModel: scriptedModel({
+        reproduce: { decision: 'continue' },
+        diagnose: { decision: 'continue' },
+        verify: { decision: 'continue' },
+        fix: { decision: 'verified_fix' },
+        classify_outcome: { decision: 'verified_fix' },
+      }).invoke,
+    });
+    const mastra = new Mastra({ workflows: { workflow } });
+    const run = await mastra.getWorkflow('workflow').createRun();
+    const result = await run.start({ inputData: input });
+
+    expect(result.status).toBe('success');
+    if (result.status === 'success') {
+      expect(result.result).toMatchObject({
+        failureCode: 'ADMISSION_REJECTED',
+        mutationPlan: null,
       });
     }
   });
@@ -148,29 +284,18 @@ describe('triage workflow', () => {
     const invokeModel = async (request: ModelRequest): Promise<ModelInvocation> => ({
       object:
         request.phase === 'classify_outcome'
-          ? {
-              decision: 'verified_fix',
-              proposal: {
-                baseSha: 'a'.repeat(40),
-                branch: 'triagebot/fix-42',
-                headSha: 'b'.repeat(40),
-              },
-            }
+          ? { decision: 'verified_fix' }
           : request.phase === 'fix'
-            ? {
-                decision: 'verified_fix',
-                proposal: {
-                  baseSha: 'a'.repeat(40),
-                  branch: 'triagebot/fix-42',
-                  headSha: 'b'.repeat(40),
-                },
-              }
+            ? { decision: 'verified_fix' }
             : { decision: 'continue' },
       toolCalls: request.phase === 'classify_outcome' ? [{ name: 'write_file' }] : [],
     });
     const workflow = createTriageWorkflow({
+      admitChanges: async () => true,
       collectEvidence: async ({ phase }) => [
-        { kind: 'model_stage', phase, status: 'observed' as const },
+        phase === 'verify'
+          ? { kind: 'test', phase, status: 'passed' as const }
+          : { kind: 'model_stage', phase, status: 'observed' as const },
       ],
       invokeModel,
     });

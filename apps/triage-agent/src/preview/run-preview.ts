@@ -28,6 +28,16 @@ const launcherResultSchema = z
     urls: z.array(z.string().min(1).max(2_048)).min(1).max(5),
   })
   .strict();
+const inspectionResultSchema = z.object({ artifactId: z.string().min(1).max(200) }).strict();
+
+export function parsePreviewInspectionOutput(output: string): { artifactId: string } {
+  if (Buffer.byteLength(output) > 8_192) throw new Error('PREVIEW_INSPECTION_INVALID');
+  try {
+    return inspectionResultSchema.parse(JSON.parse(output) as unknown);
+  } catch {
+    throw new Error('PREVIEW_INSPECTION_INVALID');
+  }
+}
 
 function validateCredentials(credentials: Readonly<Record<string, string>>): void {
   const entries = Object.entries(credentials);
@@ -65,7 +75,7 @@ export async function runPreview(input: {
   if (!input.inspectChangedCode && !input.launch && !input.workspaceRoot) {
     return { status: 'skipped', urls: [] };
   }
-  if (!input.inspectChangedCode || !input.launch || !input.lease || !input.workspaceRoot) {
+  if (!input.inspectChangedCode || !input.lease || !input.workspaceRoot) {
     return { reasonCode: 'PREVIEW_CONFIGURATION_INVALID', status: 'failed', urls: [] };
   }
   if (
@@ -90,6 +100,10 @@ export async function runPreview(input: {
     }
   } catch {
     return { reasonCode: 'PREVIEW_INSPECTION_FAILED', status: 'failed', urls: [] };
+  }
+
+  if (!input.launch) {
+    return { reasonCode: 'PREVIEW_CONFIGURATION_INVALID', status: 'failed', urls: [] };
   }
 
   await input.lease.assertCurrent();

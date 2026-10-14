@@ -100,6 +100,11 @@ export interface MaterializedWorkspace<TWorkspace = Workspace> {
   workspaceRoot: string;
 }
 
+export interface SandboxCommandEvidence {
+  kind: 'command' | 'test';
+  status: 'failed' | 'passed';
+}
+
 type SecureWorkspaceLifecycle = {
   destroy?: () => Promise<unknown>;
   sandbox:
@@ -109,6 +114,7 @@ type SecureWorkspaceLifecycle = {
           args?: string[],
           options?: ExecuteCommandOptions,
         ) => Promise<CommandResult>;
+        drainCommandEvidence?: () => SandboxCommandEvidence[];
       }
     | undefined;
 };
@@ -153,6 +159,7 @@ function boundedCommand(command: string, args: string[], limits: CommandLimits):
 }
 
 class BoundedLocalSandbox extends LocalSandbox {
+  private readonly commandEvidence: SandboxCommandEvidence[] = [];
   private commandCount = 0;
   private readonly commandLimits: CommandLimits;
   private readonly deadline: number;
@@ -166,11 +173,18 @@ class BoundedLocalSandbox extends LocalSandbox {
     this.deadline = Date.now() + commandLimits.maxElapsedMs;
   }
 
+  drainCommandEvidence(): SandboxCommandEvidence[] {
+    return this.commandEvidence.splice(0);
+  }
+
   override async executeCommand(
     command: string,
     args: string[] = [],
     options: ExecuteCommandOptions = {},
   ): Promise<CommandResult> {
+    const kind = /(?:^|[\/ -])(?:test|spec|check)(?:$|[ /-])/iu.test(`${command} ${args.join(' ')}`)
+      ? 'test'
+      : 'command';
     this.commandCount += 1;
     if (this.commandCount > this.commandLimits.maxCommands) {
       throw new Error('WORKSPACE_COMMAND_LIMIT');
@@ -237,7 +251,11 @@ class BoundedLocalSandbox extends LocalSandbox {
       const redactedResult = { ...result };
       delete redactedResult.args;
       delete redactedResult.command;
+      this.commandEvidence.push({ kind, status: result.success ? 'passed' : 'failed' });
       return redactedResult;
+    } catch (error) {
+      this.commandEvidence.push({ kind, status: 'failed' });
+      throw error;
     } finally {
       clearInterval(watchdog);
       await watchdogScan;

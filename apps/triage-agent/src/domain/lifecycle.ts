@@ -1,4 +1,5 @@
 import type { ProjectedGitHubEvent } from './event-projection.js';
+import type { ProposalIdentity } from './proposal.js';
 
 export const lifecycleStates = [
   'needs_triage',
@@ -136,7 +137,15 @@ export function transitionLifecycle(from: LifecycleState, to: LifecycleState): T
 export type EventRoute =
   | { kind: 'cleanup'; issueNumber: number }
   | { kind: 'conflict'; labels: string[]; states: LifecycleState[] }
-  | { commentId: number; kind: 'classify_fix_response'; state: 'fix_pending' }
+  | {
+      generation: number;
+      kind: 'recover';
+      proposal?: ProposalIdentity;
+      pullRequestId?: number;
+      recoveryKind: 'failure' | 'proposal' | 'report' | 'transition';
+      state: LifecycleState;
+    }
+  | { commentId: number; generation: number; kind: 'classify_fix_response'; state: 'fix_pending' }
   | { commentId: number; generation: number; kind: 'classify_retriage'; state: LifecycleState }
   | {
       eventFingerprint: string;
@@ -218,7 +227,12 @@ export function evaluateRoute(input: RouteInput): EventRoute {
     return { kind: 'noop', reason: 'model_event_budget_exhausted' };
   }
   if (label.state === 'fix_pending') {
-    return { commentId: event.comment.id, kind: 'classify_fix_response', state: label.state };
+    return {
+      commentId: event.comment.id,
+      generation: ledger.generation,
+      kind: 'classify_fix_response',
+      state: label.state,
+    };
   }
   if (!retriableStates.has(label.state)) return { kind: 'noop', reason: 'terminal_state' };
   if (input.activationPolicy === 'trusted' && !input.trustedActivation && !input.trustedReset) {

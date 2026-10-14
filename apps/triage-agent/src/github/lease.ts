@@ -6,6 +6,7 @@ export interface LeaseRecord {
   mutationDeadline: string;
   repository: string;
   workflowRunId: number;
+  workflowRunAttempt: number;
 }
 
 export type WorkflowRunStatus =
@@ -51,11 +52,24 @@ function validateLease(lease: LeaseRecord): void {
   if (!Number.isInteger(lease.workflowRunId) || lease.workflowRunId <= 0) {
     throw new Error('LEASE_WORKFLOW_RUN_INVALID');
   }
+  if (!Number.isInteger(lease.workflowRunAttempt) || lease.workflowRunAttempt <= 0) {
+    throw new Error('LEASE_WORKFLOW_ATTEMPT_INVALID');
+  }
   if (!Number.isInteger(lease.issueNumber) || lease.issueNumber <= 0) {
     throw new Error('LEASE_ISSUE_INVALID');
   }
   if (!/^[^/\s]+\/[^/\s]+$/u.test(lease.repository)) {
     throw new Error('LEASE_REPOSITORY_INVALID');
+  }
+}
+
+export function assertLeaseIdentity(
+  lease: LeaseRecord,
+  expected: { issueNumber: number; repository: string },
+): void {
+  validateLease(lease);
+  if (lease.issueNumber !== expected.issueNumber || lease.repository !== expected.repository) {
+    throw new Error('LEASE_IDENTITY_MISMATCH');
   }
 }
 
@@ -85,6 +99,7 @@ export function decideLeaseAcquisition(input: {
   validateLease(input.current);
   if (
     input.current.workflowRunId === input.candidate.workflowRunId &&
+    input.current.workflowRunAttempt === input.candidate.workflowRunAttempt &&
     input.current.fencingToken === input.candidate.fencingToken
   ) {
     return { kind: 'already_owned', lease: input.current };
@@ -122,10 +137,13 @@ export type LeaseReleaseDecision =
 
 export function decideLeaseRelease(
   current: LeaseRecord,
-  expected: { fencingToken: string; workflowRunId: number },
+  expected: { fencingToken: string; workflowRunAttempt?: number; workflowRunId: number },
 ): LeaseReleaseDecision {
   validateLease(current);
   if (current.workflowRunId !== expected.workflowRunId) {
+    return { kind: 'lost', reason: 'workflow_run_changed' };
+  }
+  if (current.workflowRunAttempt !== (expected.workflowRunAttempt ?? 1)) {
     return { kind: 'lost', reason: 'workflow_run_changed' };
   }
   if (current.fencingToken !== expected.fencingToken) {
@@ -136,7 +154,12 @@ export function decideLeaseRelease(
 
 export function verifyLeaseOwnership(
   current: LeaseRecord,
-  expected: { fencingToken: string; serverNow: string; workflowRunId: number },
+  expected: {
+    fencingToken: string;
+    serverNow: string;
+    workflowRunAttempt?: number;
+    workflowRunId: number;
+  },
 ): LeaseOwnershipDecision {
   const identity = decideLeaseRelease(current, expected);
   if (identity.kind === 'lost') return identity;
@@ -153,7 +176,7 @@ export interface LeaseGuard {
 }
 
 export function createLeaseGuard(input: {
-  expected: { fencingToken: string; workflowRunId: number };
+  expected: { fencingToken: string; workflowRunAttempt?: number; workflowRunId: number };
   readCurrent(): Promise<{ lease: LeaseRecord; serverNow: string }>;
 }): LeaseGuard {
   return {

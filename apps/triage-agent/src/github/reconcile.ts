@@ -6,6 +6,8 @@ import {
   assertSafeOutboundText,
   renderProposalComment,
   renderPullRequestContent,
+  renderTriageReport,
+  type TriageReportSemantics,
 } from '../security/content-policy.js';
 import type { PreviewResult } from '../preview/run-preview.js';
 import type { FencedGitHubMutationClient, GitHubPullRequest } from './mutation-client.js';
@@ -72,6 +74,58 @@ async function reconcileLifecycleLabel(input: {
   await input.api.setLabels(input.issueNumber, next);
 }
 
+export async function reconcileLifecycleState(input: {
+  api: FencedGitHubMutationClient;
+  issueNumber: number;
+  labels: LifecycleLabels;
+  target: LifecycleState;
+}): Promise<void> {
+  await reconcileLifecycleLabel(input);
+}
+
+export async function reconcileTriageReport(input: {
+  api: FencedGitHubMutationClient;
+  identity: ReconciliationIdentity;
+  labels: LifecycleLabels;
+  reasonCode: string;
+  report: TriageReportSemantics;
+  state: Exclude<LifecycleState, 'failed' | 'fix_pending' | 'fix_rejected' | 'fix_verified'>;
+  stoppedAt: string;
+}): Promise<void> {
+  if (!/^[a-z0-9_]{1,100}$/u.test(input.reasonCode)) {
+    throw new Error('OUTBOUND_REPORT_INVALID');
+  }
+  const visibleBody = renderTriageReport({
+    report: input.report,
+    state: input.state,
+    stoppedAt: input.stoppedAt,
+  });
+  const existing = await hasMarker(
+    input.api,
+    input.identity.issueNumber,
+    (marker) =>
+      marker.kind === 'report' &&
+      marker.eventFingerprint === input.identity.eventFingerprint &&
+      marker.generation === input.identity.generation &&
+      marker.state === input.state,
+  );
+  if (!existing) {
+    await input.api.createComment(
+      input.identity.issueNumber,
+      `${visibleBody}\n\n${markerFor(input.identity, {
+        kind: 'report',
+        state: input.state,
+      })}`,
+    );
+  }
+  await reconcileLifecycleLabel({
+    api: input.api,
+    issueNumber: input.identity.issueNumber,
+    labels: input.labels,
+    target: input.state,
+  });
+}
+
 export async function reconcileFixProposal(input: {
   allowedAncillaryLabels?: readonly string[];
   allowedPreviewHosts?: readonly string[];
@@ -81,6 +135,7 @@ export async function reconcileFixProposal(input: {
   labels: LifecycleLabels;
   preview: PreviewResult;
   proposal: ProposalIdentity;
+  report?: TriageReportSemantics;
 }): Promise<{ proposal: ProposalIdentity; state: 'fix_pending' }> {
   const ancillaryLabels = assertAllowedLabels(
     input.ancillaryLabels,
@@ -92,6 +147,7 @@ export async function reconcileFixProposal(input: {
     headSha: input.proposal.headSha,
     preview: input.preview,
     proposalId: input.proposal.id,
+    ...(input.report ? { report: input.report } : {}),
   });
   const existing = await hasMarker(
     input.api,
@@ -141,12 +197,16 @@ export async function reconcileConfirmedProposal(input: {
   }
   const remoteHead = await input.api.getBranchSha(input.proposal.branch);
   if (remoteHead !== input.proposal.headSha) throw new Error('PROPOSAL_BRANCH_MOVED');
-  const matches = (
+  const candidates = (
     await input.api.listPullRequests({
       base: input.resolvedDefaultBranch,
       head: input.proposal.branch,
     })
   ).filter(({ headSha }) => headSha === input.proposal.headSha);
+  if (candidates.some(({ authorIsAction }) => !authorIsAction)) {
+    throw new Error('PULL_REQUEST_OWNERSHIP_CONFLICT');
+  }
+  const matches = candidates.filter(({ authorIsAction }) => authorIsAction);
   if (matches.length > 1) throw new Error('PULL_REQUEST_CONFLICT');
   const existing = matches[0];
   const pullRequest =

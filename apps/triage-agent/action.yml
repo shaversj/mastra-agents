@@ -23,7 +23,7 @@ inputs:
     required: false
   triage-skill:
     description: 'Path to the project-owned triage skill directory'
-    required: true
+    required: false
   pr-skill:
     description: 'Optional path to the project-owned PR-writing skill directory'
     required: false
@@ -79,7 +79,7 @@ inputs:
     description: 'Label applied to pull requests created from verified fixes'
     default: 'fix verified'
   preview-command:
-    description: 'Optional secret-free preview inspection command'
+    description: 'Optional offline, secret-free changed-code inspection command returning strict JSON'
     required: false
   preview-allowed-hosts:
     description: 'Comma-separated HTTPS host allowlist for preview results'

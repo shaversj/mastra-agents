@@ -64,8 +64,13 @@ describe('recovery markers and proposals', () => {
     };
 
     expect(reconcileMarkers([current], { eventFingerprint: 'event-1' })).toEqual({
-      kind: 'duplicate_event',
+      kind: 'in_sync',
       marker: current,
+    });
+    const complete = { ...current, kind: 'complete' as const };
+    expect(reconcileMarkers([current, complete], { eventFingerprint: 'event-1' })).toEqual({
+      kind: 'duplicate_event',
+      marker: complete,
     });
     expect(reconcileMarkers([current], { fencingToken: 'fence-old' })).toEqual({
       currentFencingToken: 'fence-2',
@@ -94,7 +99,9 @@ describe('recovery markers and proposals', () => {
       summarizeAttemptLedger(
         [
           { ...base, generation: 1, kind: 'failure' },
+          { ...base, generation: 1, kind: 'complete' },
           { ...base, eventFingerprint: 'event-2', generation: 2, kind: 'failure' },
+          { ...base, eventFingerprint: 'event-2', generation: 2, kind: 'complete' },
           { ...base, eventFingerprint: 'event-3', generation: 2, kind: 'model_event' },
         ],
         2,
@@ -103,7 +110,7 @@ describe('recovery markers and proposals', () => {
       failureCount: 1,
       generation: 2,
       modelEventCount: 1,
-      processedEventFingerprints: ['event-1', 'event-2', 'event-3'],
+      processedEventFingerprints: ['event-1', 'event-2'],
     });
   });
 

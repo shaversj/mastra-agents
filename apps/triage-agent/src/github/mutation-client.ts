@@ -7,6 +7,7 @@ export interface GitHubActionComment {
 }
 
 export interface GitHubPullRequest {
+  authorIsAction: boolean;
   base: string;
   body: string;
   head: string;

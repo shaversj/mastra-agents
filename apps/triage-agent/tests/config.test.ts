@@ -82,6 +82,125 @@ describe('triage Action configuration', () => {
     ).toThrowError('Invalid Action input: preview-allowed-hosts');
   });
 
+  it('parses route-only inputs without provider credentials or a triage skill', () => {
+    expect(
+      parseActionInputs({ INPUT_READ_TOKEN: 'read-secret', INPUT_WRITE_TOKEN: 'write-secret' }),
+    ).toMatchObject({ activationPolicy: 'automatic-public' });
+  });
+
+  it('requires provider credentials and a triage skill only during model preflight', () => {
+    const routeOnly = parseActionInputs({
+      INPUT_READ_TOKEN: 'read-secret',
+      INPUT_WRITE_TOKEN: 'write-secret',
+    });
+    expect(() =>
+      preflightAction(routeOnly, {
+        labelsPresent: true,
+        repositoryVisibility: 'public',
+        route: 'model',
+      }),
+    ).toThrowError('Missing Anthropic credentials for configured model');
+    expect(() =>
+      preflightAction(
+        parseActionInputs({
+          INPUT_ANTHROPIC_API_KEY: 'provider-secret',
+          INPUT_READ_TOKEN: 'read-secret',
+          INPUT_WRITE_TOKEN: 'write-secret',
+        }),
+        { labelsPresent: true, repositoryVisibility: 'public', route: 'model' },
+      ),
+    ).toThrowError('Missing required Action input: triage-skill');
+  });
+
+  it('requires credentials matching both configured model providers', () => {
+    const anthropicOnly = parseActionInputs(validEnvironment);
+    expect(() =>
+      preflightAction(
+        { ...anthropicOnly, triageModel: 'openai/gpt-5.4' },
+        { labelsPresent: true, repositoryVisibility: 'public', route: 'model' },
+      ),
+    ).toThrowError('Missing OpenAI credentials for configured model');
+    expect(() =>
+      preflightAction(
+        { ...anthropicOnly, verificationModel: 'openai/gpt-5.4' },
+        { labelsPresent: true, repositoryVisibility: 'public', route: 'model' },
+      ),
+    ).toThrowError('Missing OpenAI credentials for configured model');
+
+    const cloudflare = parseActionInputs({
+      INPUT_CLOUDFLARE_ACCOUNT_ID: 'account',
+      INPUT_CLOUDFLARE_API_KEY: 'provider-secret',
+      INPUT_READ_TOKEN: 'read-secret',
+      INPUT_TRIAGE_MODEL: 'cloudflare-workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      INPUT_TRIAGE_SKILL: '.agents/skills/triage',
+      INPUT_VERIFICATION_MODEL: 'cloudflare-workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      INPUT_WRITE_TOKEN: 'write-secret',
+    });
+    expect(() =>
+      preflightAction(cloudflare, {
+        labelsPresent: true,
+        repositoryVisibility: 'public',
+        route: 'model',
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      preflightAction(
+        { ...anthropicOnly, triageModel: 'unknown/model' },
+        { labelsPresent: true, repositoryVisibility: 'public', route: 'model' },
+      ),
+    ).toThrowError('Unsupported configured model provider');
+  });
+
+  it('fails model preflight when configured repository labels are unavailable', () => {
+    expect(() =>
+      preflightAction(parseActionInputs(validEnvironment), {
+        labelsPresent: false,
+        repositoryVisibility: 'public',
+        route: 'model',
+      }),
+    ).toThrowError('Configured repository labels are unavailable');
+  });
+
+  it('requires a configured PR skill only on routes that use it', () => {
+    const inputs = parseActionInputs({
+      ...validEnvironment,
+      INPUT_PR_SKILL: '.agents/skills/pr-writer',
+    });
+    expect(() =>
+      preflightAction(inputs, {
+        labelsPresent: true,
+        prSkillPresent: false,
+        prSkillRequired: false,
+        repositoryVisibility: 'public',
+        route: 'model',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      preflightAction(inputs, {
+        labelsPresent: true,
+        prSkillPresent: false,
+        prSkillRequired: true,
+        repositoryVisibility: 'public',
+        route: 'model',
+      }),
+    ).toThrowError('Configured PR skill is unavailable');
+  });
+
+  it('allows an offline preview inspection command through model preflight', () => {
+    const inputs = parseActionInputs({
+      ...validEnvironment,
+      INPUT_PREVIEW_COMMAND: 'prepare-preview',
+    });
+    expect(() =>
+      preflightAction(inputs, {
+        labelsPresent: true,
+        repositoryVisibility: 'public',
+        route: 'model',
+      }),
+    ).not.toThrow();
+  });
+
   it('requires complete provider and elevated-publication pairs', () => {
     expect(() =>
       parseActionInputs({
@@ -103,7 +222,11 @@ describe('triage Action configuration', () => {
     const inputs = parseActionInputs(validEnvironment);
 
     expect(() =>
-      preflightAction(inputs, { repositoryVisibility: 'private', route: 'model' }),
+      preflightAction(inputs, {
+        labelsPresent: true,
+        repositoryVisibility: 'private',
+        route: 'model',
+      }),
     ).toThrowError('Model routes support public repositories only');
   });
 

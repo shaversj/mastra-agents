@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { appMetadata } from '../../config/app.js';
 import { selectAllowedAncillaryLabels } from '../../domain/lifecycle.js';
-import { proposalIdentity, type ProposalIdentity } from '../../domain/proposal.js';
+import type { TriageAgentModel } from '../agents/triage.js';
 
 export type ModelPhase =
   | 'classify_confirmation'
@@ -21,6 +21,7 @@ export interface ModelRequest {
   activeTools?: string[];
   maxModelRetries: number;
   maxSteps: number;
+  model?: TriageAgentModel;
   payload: Readonly<Record<string, unknown>>;
   phase: ModelPhase;
   schema: z.ZodType;
@@ -45,14 +46,6 @@ export type ModelInvocationFailure =
   | 'RUN_BUDGET_EXHAUSTED'
   | 'TOOL_CALL_ATTEMPTED';
 
-const proposalSchema = z
-  .object({
-    baseSha: z.string().regex(/^[0-9a-f]{40}$/u),
-    branch: z.string().regex(/^triagebot\/fix-[1-9][0-9]*$/u),
-    headSha: z.string().regex(/^[0-9a-f]{40}$/u),
-  })
-  .strict();
-
 const evidenceSchema = z
   .object({
     code: z.string().min(1).max(100).optional(),
@@ -69,6 +62,7 @@ export const triageWorkflowInputSchema = z
     allowedPackageLabels: z.array(z.string().min(1).max(100)).max(100).default([]),
     allowedPriorityLabels: z.array(z.string().min(1).max(100)).max(100).default([]),
     attemptId: z.string().min(1).max(200),
+    autoPrOnFix: z.boolean().default(false),
     eventFingerprint: z.string().min(1).max(500),
     generation: z.number().int().positive(),
     issue: z
@@ -109,29 +103,42 @@ const labelSelectionSchema = z
     priorityLabel: z.string().min(1).max(100).optional(),
   })
   .strict();
+const prContentSchema = z
+  .object({
+    bodyFields: z.array(z.string().min(1).max(500)).min(1).max(8),
+    title: z.string().min(1).max(160),
+  })
+  .strict();
 
+const triageOutcomePlanSchema = z
+  .object({
+    kind: z.literal('triage_outcome'),
+    reasonCode: z.string().min(1).max(100),
+    report: reportSchema,
+    state: z.enum([
+      'not_actionable',
+      'needs_reproduction',
+      'skipped',
+      'unable_to_reproduce',
+      'unable_to_fix',
+    ]),
+  })
+  .strict();
+const proposalPlanSchema = z
+  .object({
+    kind: z.literal('publish_proposal'),
+    labels: labelSelectionSchema,
+    prContent: prContentSchema.optional(),
+    report: reportSchema,
+  })
+  .strict();
 const mutationPlanSchema = z.discriminatedUnion('kind', [
-  z
-    .object({
-      kind: z.literal('triage_outcome'),
-      reasonCode: z.string().min(1).max(100),
-      state: z.enum([
-        'not_actionable',
-        'needs_reproduction',
-        'skipped',
-        'unable_to_reproduce',
-        'unable_to_fix',
-      ]),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('publish_proposal'),
-      labels: labelSelectionSchema,
-      proposal: proposalSchema.extend({ id: z.string().min(1) }).strict(),
-      report: reportSchema,
-    })
-    .strict(),
+  triageOutcomePlanSchema,
+  proposalPlanSchema,
+]);
+const internalMutationPlanSchema = z.discriminatedUnion('kind', [
+  triageOutcomePlanSchema.extend({ report: reportSchema.optional() }),
+  proposalPlanSchema,
 ]);
 
 export const triageWorkflowOutputSchema = z
@@ -151,10 +158,6 @@ export const triageWorkflowOutputSchema = z
       .optional(),
     generation: z.number().int().positive(),
     mutationPlan: mutationPlanSchema.nullable(),
-    proposal: proposalSchema
-      .extend({ id: z.string().min(1) })
-      .strict()
-      .optional(),
     state: z.enum([
       'failed',
       'fix_pending',
@@ -170,17 +173,12 @@ export const triageWorkflowOutputSchema = z
 
 const internalSchema = z
   .object({
-    candidateProposal: proposalSchema.optional(),
+    candidateVerifiedFix: z.boolean().optional(),
     deadlineAt: z.number(),
     evidence: z.array(evidenceSchema),
     failureCode: triageWorkflowOutputSchema.shape.failureCode,
     input: triageWorkflowInputSchema,
-    mutationPlan: mutationPlanSchema.nullable().optional(),
-    outcomeReason: z.string().min(1).max(100).optional(),
-    proposal: proposalSchema
-      .extend({ id: z.string().min(1) })
-      .strict()
-      .optional(),
+    mutationPlan: internalMutationPlanSchema.nullable().optional(),
     state: triageWorkflowOutputSchema.shape.state.optional(),
     stoppedAt: triageWorkflowOutputSchema.shape.stoppedAt.optional(),
   })
@@ -214,13 +212,13 @@ const investigationDecisionSchema = z.discriminatedUnion('decision', [
 ]);
 const fixDecisionSchema = z.discriminatedUnion('decision', [
   z.object({ decision: z.literal('unable_to_fix'), reasonCode: z.literal('fix_failed') }).strict(),
-  z.object({ decision: z.literal('verified_fix'), proposal: proposalSchema }).strict(),
+  z.object({ decision: z.literal('verified_fix') }).strict(),
 ]);
 const outcomeDecisionSchema = z.discriminatedUnion('decision', [
   z
     .object({ decision: z.literal('unable_to_fix'), reasonCode: z.string().min(1).max(100) })
     .strict(),
-  z.object({ decision: z.literal('verified_fix'), proposal: proposalSchema }).strict(),
+  z.object({ decision: z.literal('verified_fix') }).strict(),
 ]);
 
 export const invokeRegisteredTriageAgent: ModelInvoker = async (request, runtime) => {
@@ -242,27 +240,31 @@ export const invokeRegisteredTriageAgent: ModelInvoker = async (request, runtime
         maxRetries: request.maxModelRetries,
         timeout: { stepMs: request.timeoutMs, totalMs: request.timeoutMs },
       },
+      ...(request.model ? { model: request.model } : {}),
       ...(request.activeTools?.length === 0 ? { toolChoice: 'none' } : {}),
       structuredOutput: { errorStrategy: 'strict', schema: request.schema },
       ...(request.skill ? { instructions: request.skill } : {}),
       ...(runtime.abortSignal ? { abortSignal: runtime.abortSignal } : {}),
+      tracingOptions: redactedTracingOptions,
     },
   );
   return { object: result.object, toolCalls: result.toolCalls ?? [] };
 };
 
+export const redactedTracingOptions = {
+  hideInput: true,
+  hideOutput: true,
+} as const;
+
 export interface TriageWorkflowOptions {
-  admitProposal?: (input: {
-    evidence: WorkflowEvidence[];
-    input: TriageInput;
-    proposal: ProposalIdentity;
-  }) => Promise<boolean>;
+  admitChanges?: (input: { evidence: WorkflowEvidence[]; input: TriageInput }) => Promise<boolean>;
   clock?: () => number;
   collectEvidence?: (input: {
     input: TriageInput;
     phase: 'reproduce' | 'diagnose' | 'verify' | 'fix';
   }) => Promise<WorkflowEvidence[]>;
   invokeModel?: ModelInvoker;
+  prSkill?: string;
 }
 
 function failed(
@@ -281,16 +283,15 @@ function failed(
 
 function toWorkflowOutput(state: InternalState): z.infer<typeof triageWorkflowOutputSchema> {
   if (!state.state) throw new Error('TRIAGE_WORKFLOW_STATE_MISSING');
-  return {
+  return triageWorkflowOutputSchema.parse({
     attemptId: state.input.attemptId,
     evidence: state.evidence,
     ...(state.failureCode ? { failureCode: state.failureCode } : {}),
     generation: state.input.generation,
     mutationPlan: state.mutationPlan ?? null,
-    ...(state.proposal ? { proposal: state.proposal } : {}),
     state: state.state,
     stoppedAt: state.stoppedAt ?? 'admission',
-  };
+  });
 }
 
 function invocationFailure(error: unknown): 'MODEL_RETRIES_EXHAUSTED' | 'MODEL_TIMEOUT' {
@@ -346,6 +347,7 @@ async function invokeParsed<T extends z.ZodType>(input: {
   phase: ModelPhase;
   runtime: { abortSignal?: AbortSignal; mastra: unknown };
   schema: T;
+  skill?: string;
   state: InternalState;
 }): Promise<{ error?: NonNullable<InternalState['failureCode']>; value?: z.infer<T> }> {
   return invokeStructuredModel({
@@ -362,10 +364,10 @@ async function invokeParsed<T extends z.ZodType>(input: {
       evidence: input.state.evidence,
       issue: input.state.input.issue,
       repository: input.state.input.repository,
-      ...(input.state.candidateProposal ? { proposal: input.state.candidateProposal } : {}),
     },
     phase: input.phase,
     schema: input.schema,
+    ...(input.skill ? { skill: input.skill } : {}),
   });
 }
 
@@ -387,7 +389,6 @@ function closeEarly(
   return {
     ...state,
     mutationPlan: { kind: 'triage_outcome', reasonCode, state: stateName },
-    outcomeReason: reasonCode,
     state: stateName,
     stoppedAt: phase,
   };
@@ -440,11 +441,10 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
         const next = { ...inputData, evidence: [...inputData.evidence, ...evidence] };
         const decision = invocation.value as {
           decision: string;
-          proposal?: z.infer<typeof proposalSchema>;
           reasonCode?: string;
         };
-        if (decision.decision === 'verified_fix' && decision.proposal) {
-          return { ...next, candidateProposal: decision.proposal };
+        if (decision.decision === 'verified_fix') {
+          return { ...next, candidateVerifiedFix: true };
         }
         return closeEarly(next, phase, decision);
       },
@@ -457,7 +457,7 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
     outputSchema: internalSchema,
     execute: async ({ inputData, mastra, abortSignal }) => {
       if (inputData.state) return inputData;
-      if (!inputData.candidateProposal || inputData.evidence.length === 0) {
+      if (!inputData.candidateVerifiedFix || inputData.evidence.length === 0) {
         return failed(inputData, 'ADMISSION_REJECTED');
       }
       const invocation = await invokeParsed({
@@ -475,10 +475,38 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
       if (decision.decision !== 'verified_fix') {
         return closeEarly(inputData, 'fix', decision);
       }
-      if (JSON.stringify(decision.proposal) !== JSON.stringify(inputData.candidateProposal)) {
-        return failed(inputData, 'ADMISSION_REJECTED');
-      }
       return inputData;
+    },
+  });
+
+  const draftOutcomeReport = createStep({
+    id: 'draft-triage-outcome-report',
+    inputSchema: internalSchema,
+    outputSchema: internalSchema,
+    execute: async ({ inputData, mastra, abortSignal }) => {
+      if (inputData.mutationPlan?.kind !== 'triage_outcome') return inputData;
+      const report = await invokeParsed({
+        activeTools: [],
+        clock,
+        invokeModel,
+        phase: 'draft_report',
+        runtime: { abortSignal, mastra },
+        schema: reportSchema,
+        state: inputData,
+      });
+      if (report.error || !report.value) {
+        return {
+          ...inputData,
+          failureCode: report.error ?? 'MALFORMED_STRUCTURED_OUTPUT',
+          mutationPlan: null,
+          state: 'failed' as const,
+          stoppedAt: 'admission' as const,
+        };
+      }
+      return {
+        ...inputData,
+        mutationPlan: { ...inputData.mutationPlan, report: report.value },
+      };
     },
   });
 
@@ -488,17 +516,22 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
     outputSchema: triageWorkflowOutputSchema,
     execute: async ({ inputData, mastra, abortSignal }) => {
       if (inputData.state) return toWorkflowOutput(inputData);
-      if (!inputData.candidateProposal) {
+      if (!inputData.candidateVerifiedFix) {
         return toWorkflowOutput(failed(inputData, 'ADMISSION_REJECTED'));
       }
-      const proposal = proposalIdentity(inputData.candidateProposal);
+      if (
+        !inputData.evidence.some(
+          ({ kind, phase, status }) =>
+            phase === 'verify' && status === 'passed' && (kind === 'command' || kind === 'test'),
+        )
+      ) {
+        return toWorkflowOutput(failed(inputData, 'ADMISSION_REJECTED'));
+      }
       const admitted =
-        proposal.baseSha === inputData.input.repository.baseSha &&
-        (await (options.admitProposal?.({
+        (await options.admitChanges?.({
           evidence: inputData.evidence,
           input: inputData.input,
-          proposal,
-        }) ?? Promise.resolve(true)));
+        })) ?? false;
       if (!admitted) {
         return toWorkflowOutput(failed(inputData, 'ADMISSION_REJECTED'));
       }
@@ -535,10 +568,27 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
           ? { requestedPriorityLabel: labels.value.priorityLabel }
           : {}),
       });
+      const prContent = inputData.input.autoPrOnFix
+        ? await invokeParsed({
+            activeTools: [],
+            clock,
+            invokeModel,
+            phase: 'draft_pr_content',
+            runtime: { abortSignal, mastra },
+            schema: prContentSchema,
+            ...(options.prSkill ? { skill: options.prSkill } : {}),
+            state: inputData,
+          })
+        : undefined;
+      if (prContent?.error || (inputData.input.autoPrOnFix && !prContent?.value)) {
+        return toWorkflowOutput(
+          failed(inputData, prContent?.error ?? 'MALFORMED_STRUCTURED_OUTPUT'),
+        );
+      }
       const plan = {
         kind: 'publish_proposal' as const,
         labels: selectedLabels,
-        proposal,
+        ...(prContent?.value ? { prContent: prContent.value } : {}),
         report: report.value,
       };
       return {
@@ -546,7 +596,6 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
         evidence: inputData.evidence,
         generation: inputData.input.generation,
         mutationPlan: plan,
-        proposal,
         state: 'fix_pending' as const,
         stoppedAt: 'admission' as const,
       };
@@ -564,6 +613,7 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
     .then(stage('diagnose', investigationDecisionSchema))
     .then(stage('verify', investigationDecisionSchema))
     .then(stage('fix', fixDecisionSchema))
+    .then(draftOutcomeReport)
     .then(classifyOutcome)
     .then(admitProposal)
     .commit();

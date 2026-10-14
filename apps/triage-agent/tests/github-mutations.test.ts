@@ -12,6 +12,7 @@ import {
   reconcileConfirmedProposal,
   reconcileFixProposal,
   reconcileRejectedProposal,
+  reconcileTriageReport,
 } from '../src/github/reconcile.js';
 
 const proposal = proposalIdentity({
@@ -28,6 +29,7 @@ class FakeGitHub implements GitHubMutationTransport {
   labels = [defaultLifecycleLabels.needs_triage];
   nextId = 1;
   prs: Array<{
+    authorIsAction: boolean;
     base: string;
     body: string;
     head: string;
@@ -55,7 +57,7 @@ class FakeGitHub implements GitHubMutationTransport {
     headSha: string;
     title: string;
   }) {
-    const value = { ...input, id: this.nextId++, open: true };
+    const value = { ...input, authorIsAction: true, id: this.nextId++, open: true };
     this.prs.push(value);
     this.mutate('createPullRequest');
     return value;
@@ -98,6 +100,86 @@ const identity = {
 };
 
 describe('fenced GitHub reconciliation', () => {
+  it('publishes one idempotent trusted-rendered report for a triage outcome', async () => {
+    const fake = new FakeGitHub();
+    const { api } = client(fake);
+    const report = {
+      details: ['The report needs additional reproduction details.'],
+      headline: 'More information is needed',
+    };
+    await reconcileTriageReport({
+      api,
+      identity,
+      labels: defaultLifecycleLabels,
+      reasonCode: 'missing_steps',
+      report,
+      state: 'needs_reproduction',
+      stoppedAt: 'reproduce',
+    });
+    await reconcileTriageReport({
+      api,
+      identity,
+      labels: defaultLifecycleLabels,
+      reasonCode: 'missing_steps',
+      report,
+      state: 'needs_reproduction',
+      stoppedAt: 'reproduce',
+    });
+
+    expect(fake.comments).toHaveLength(1);
+    expect(fake.comments[0]?.body).toContain('More information is needed');
+    expect(fake.comments[0]?.body).not.toContain('missing_steps');
+    expect(fake.labels).toEqual([defaultLifecycleLabels.needs_reproduction]);
+  });
+
+  it.each([1, 2])('repairs a triage report after mutation crash point %s', async (failAfter) => {
+    const fake = new FakeGitHub();
+    const { api } = client(fake);
+    const input = {
+      api,
+      identity,
+      labels: defaultLifecycleLabels,
+      reasonCode: 'missing_steps',
+      report: {
+        details: ['The report needs additional reproduction details.'],
+        headline: 'More information is needed',
+      },
+      state: 'needs_reproduction' as const,
+      stoppedAt: 'reproduce',
+    };
+    fake.failAfter = failAfter;
+    await expect(reconcileTriageReport(input)).rejects.toThrow();
+    fake.failAfter = undefined;
+    fake.calls = [];
+
+    await reconcileTriageReport(input);
+
+    expect(fake.comments).toHaveLength(1);
+    expect(fake.labels).toEqual([defaultLifecycleLabels.needs_reproduction]);
+  });
+
+  it.each([
+    'github_pat_abcdefghijklmnopqrstuvwxyz1234567890',
+    '```ts\nconst sourceCanary = true;\n```',
+    'pnpm exec secret-command --token source-canary',
+    '@everyone follow https://evil.example/phish',
+  ])('rejects unsafe report semantics before mutation: %s', async (detail) => {
+    const fake = new FakeGitHub();
+    const { api } = client(fake);
+    await expect(
+      reconcileTriageReport({
+        api,
+        identity,
+        labels: defaultLifecycleLabels,
+        reasonCode: 'missing_steps',
+        report: { details: [detail], headline: 'Triage complete' },
+        state: 'needs_reproduction',
+        stoppedAt: 'reproduce',
+      }),
+    ).rejects.toThrow();
+    expect(fake.calls).toEqual([]);
+  });
+
   it.each([
     [{ status: 'skipped', urls: [] } as const],
     [{ status: 'failed', urls: [], reasonCode: 'PREVIEW_LAUNCH_FAILED' } as const],
@@ -112,17 +194,23 @@ describe('fenced GitHub reconciliation', () => {
       labels: defaultLifecycleLabels,
       preview,
       proposal,
+      report: {
+        details: ['The proposed change passed bounded verification.'],
+        headline: 'A verified fix is ready',
+      },
     });
     expect(result.state).toBe('fix_pending');
     expect(fake.labels).toEqual([defaultLifecycleLabels.fix_pending, 'pkg:core']);
     expect(fake.comments).toHaveLength(1);
     expect(fake.comments[0]?.body).toContain(`${proposal.branch}@${proposal.headSha}`);
+    expect(fake.comments[0]?.body).toContain('A verified fix is ready');
     expect(lease.assertCurrent).toHaveBeenCalledTimes(2);
   });
 
   it('adopts an existing matching PR and repairs state without duplication', async () => {
     const fake = new FakeGitHub();
     fake.prs.push({
+      authorIsAction: true,
       base: 'develop',
       body: 'body',
       head: proposal.branch,
@@ -150,6 +238,34 @@ describe('fenced GitHub reconciliation', () => {
     });
     expect(fake.prs).toHaveLength(1);
     expect(fake.labels).toEqual([defaultLifecycleLabels.fix_verified]);
+  });
+
+  it('rejects a matching pull request authored by another actor', async () => {
+    const fake = new FakeGitHub();
+    fake.prs.push({
+      authorIsAction: false,
+      base: 'develop',
+      body: 'copied action body',
+      head: proposal.branch,
+      headSha: proposal.headSha,
+      id: 10,
+      open: true,
+      title: 'Fix issue',
+    });
+    const { api } = client(fake);
+
+    await expect(
+      reconcileConfirmedProposal({
+        api,
+        identity,
+        labels: defaultLifecycleLabels,
+        prContent: { bodyFields: ['Fixes failure.'], title: 'Fix issue' },
+        proposal,
+        resolvedDefaultBranch: 'develop',
+      }),
+    ).rejects.toThrow('PULL_REQUEST_OWNERSHIP_CONFLICT');
+
+    expect(fake.prs).toHaveLength(1);
   });
 
   it('repairs a PR-created-before-state crash without creating a second PR', async () => {
@@ -250,6 +366,7 @@ describe('fenced GitHub reconciliation', () => {
     expect(fake.labels).toEqual([defaultLifecycleLabels.fix_rejected]);
     expect(fake.deletedBranches).toEqual([]);
     fake.prs.push({
+      authorIsAction: true,
       base: 'develop',
       body: '',
       head: proposal.branch,
@@ -278,6 +395,7 @@ describe('fenced GitHub reconciliation', () => {
       mutationDeadline: '2026-10-14T12:09:00.000Z',
       repository: 'owner/repo',
       workflowRunId: 100,
+      workflowRunAttempt: 1,
     };
     let current = lease;
     const guard = createLeaseGuard({
@@ -324,6 +442,7 @@ describe('fenced GitHub reconciliation', () => {
     ).rejects.toThrow();
     fake.prs.push(
       {
+        authorIsAction: true,
         base: 'develop',
         body: '',
         head: proposal.branch,
@@ -333,6 +452,7 @@ describe('fenced GitHub reconciliation', () => {
         title: '',
       },
       {
+        authorIsAction: true,
         base: 'develop',
         body: '',
         head: proposal.branch,

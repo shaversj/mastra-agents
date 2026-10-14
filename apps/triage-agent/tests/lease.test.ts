@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   decideLeaseAcquisition,
+  assertLeaseIdentity,
   decideLeaseRelease,
   leaseRefForIssue,
   verifyLeaseOwnership,
@@ -16,6 +17,7 @@ const current: LeaseRecord = {
   mutationDeadline: '2026-10-14T12:09:00.000Z',
   repository: 'example/widgets',
   workflowRunId: 100,
+  workflowRunAttempt: 1,
 };
 
 describe('per-issue lease decisions', () => {
@@ -130,6 +132,29 @@ describe('per-issue lease decisions', () => {
         toleratedClockSkewMs: 5_000,
       }),
     ).toEqual({ kind: 'contended', ownerWorkflowRunId: 100 });
+  });
+
+  it('does not share a fence across attempts of the same workflow run', () => {
+    expect(
+      decideLeaseAcquisition({
+        candidate: { ...current, fencingToken: 'fence-2', workflowRunAttempt: 2 },
+        current,
+        priorRunStatus: 'in_progress',
+        serverNow: '2026-10-14T12:01:00.000Z',
+      }),
+    ).toEqual({ kind: 'contended', ownerWorkflowRunId: 100 });
+  });
+
+  it('fails closed for old or cross-issue lease records', () => {
+    expect(() =>
+      assertLeaseIdentity({ ...current, workflowRunAttempt: undefined } as unknown as LeaseRecord, {
+        issueNumber: 42,
+        repository: 'example/widgets',
+      }),
+    ).toThrowError('LEASE_WORKFLOW_ATTEMPT_INVALID');
+    expect(() =>
+      assertLeaseIdentity(current, { issueNumber: 43, repository: 'example/widgets' }),
+    ).toThrowError('LEASE_IDENTITY_MISMATCH');
   });
 
   it('detects lost ownership and the immutable mutation deadline', () => {

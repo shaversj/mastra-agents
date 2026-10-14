@@ -173,7 +173,9 @@ export async function publishProposalBranch(input: {
   changes: AdmittedChanges;
   credential?: { token: string; username: string };
   defaultBranch: string;
+  eventFingerprint?: string;
   existingBranchProvenance?: BranchProvenance;
+  fencingToken?: string;
   issueNumber: number;
   lease: LeaseGuard;
   policy: PublicationPolicyDecision;
@@ -191,6 +193,11 @@ export async function publishProposalBranch(input: {
   if (!/^[^/\s]+\/[^/\s]+$/u.test(input.repository)) {
     throw new Error('PUBLISH_REPOSITORY_INVALID');
   }
+  for (const value of [input.eventFingerprint, input.fencingToken]) {
+    if (value !== undefined && (!value || value.length > 500 || /[\r\n\0]/u.test(value))) {
+      throw new Error('PUBLISH_PROVENANCE_INVALID');
+    }
+  }
   if (input.changes.changes.length === 0) throw new Error('PUBLISH_NO_CHANGES');
   const paths = input.changes.changes.map(({ path }) => path);
   if (new Set(paths).size !== paths.length) throw new Error('PUBLISH_DUPLICATE_PATH');
@@ -204,18 +211,6 @@ export async function publishProposalBranch(input: {
   let askpassPath: string | undefined;
   try {
     askpassPath = input.credential ? await writeAskpass(temporaryRoot) : undefined;
-    const defaultBranchHead = (
-      await git(
-        [
-          '-C',
-          input.sourceRepositoryRoot,
-          'rev-parse',
-          `refs/heads/${input.defaultBranch}^{commit}`,
-        ],
-        { failureCode: 'PUBLISH_DEFAULT_BRANCH_NOT_FOUND' },
-      )
-    ).trim();
-    if (defaultBranchHead !== input.baseSha) throw new Error('PUBLISH_BASE_MISMATCH');
     await git(['clone', '--no-local', '--no-checkout', input.sourceRepositoryRoot, publisherRoot], {
       failureCode: 'PUBLISH_CLONE_FAILED',
     });
@@ -282,6 +277,8 @@ export async function publishProposalBranch(input: {
       `Triage-Agent-Issue: ${input.issueNumber}`,
       `Triage-Agent-Branch: ${input.branch}`,
       `Triage-Agent-Base: ${input.baseSha}`,
+      ...(input.eventFingerprint ? [`Triage-Agent-Event: ${input.eventFingerprint}`] : []),
+      ...(input.fencingToken ? [`Triage-Agent-Fence: ${input.fencingToken}`] : []),
     ].join('\n');
     await git(
       [

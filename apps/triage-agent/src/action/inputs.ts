@@ -48,10 +48,17 @@ export interface ActionInputs {
   readToken: string;
   safeDownstreamCi: boolean;
   triageModel: string;
-  triageSkill: string;
+  triageSkill?: string;
   verificationModel: string;
   writeToken: string;
 }
+
+export type ModelActionInputs = ActionInputs &
+  (
+    | { anthropicApiKey: string }
+    | { openaiApiKey: string }
+    | { cloudflareAccountId: string; cloudflareApiKey: string }
+  ) & { triageSkill: string };
 
 function getInput(environment: Environment, name: string): string {
   const canonicalName = `INPUT_${name.replaceAll(' ', '_').toUpperCase()}`;
@@ -178,10 +185,6 @@ export function parseActionInputs(environment: Environment = process.env): Actio
   if (cloudflareAccountId && !cloudflareApiKey) {
     throw new Error('Missing required Action input: cloudflare-api-key');
   }
-  if (!anthropicApiKey && !openaiApiKey && !(cloudflareApiKey && cloudflareAccountId)) {
-    throw new Error('Missing required Action input: provider credentials');
-  }
-
   const publicationTokenKind = enumInput(
     environment,
     'publication-token-kind',
@@ -202,6 +205,7 @@ export function parseActionInputs(environment: Environment = process.env): Actio
   const buildCommand = optionalInput(environment, 'build-command');
   const previewCommand = optionalInput(environment, 'preview-command');
   const prSkill = optionalInput(environment, 'pr-skill');
+  const triageSkill = optionalInput(environment, 'triage-skill');
 
   return {
     activationPolicy: enumInput(
@@ -231,7 +235,7 @@ export function parseActionInputs(environment: Environment = process.env): Actio
     readToken: requiredInput(environment, 'read-token'),
     safeDownstreamCi,
     triageModel: getInput(environment, 'triage-model') || 'anthropic/claude-opus-4-6',
-    triageSkill: requiredInput(environment, 'triage-skill'),
+    ...(triageSkill ? { triageSkill } : {}),
     verificationModel: getInput(environment, 'verification-model') || 'anthropic/claude-sonnet-4-6',
     writeToken: requiredInput(environment, 'write-token'),
   };

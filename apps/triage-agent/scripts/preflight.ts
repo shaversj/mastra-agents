@@ -4,6 +4,7 @@ import { preflightAction } from '../src/action/preflight.js';
 const inputs = parseActionInputs();
 const route = 'model';
 preflightAction(inputs, {
+  labelsPresent: true,
   repositoryVisibility: 'public',
   route,
 });
