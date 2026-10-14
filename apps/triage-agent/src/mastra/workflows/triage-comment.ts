@@ -5,7 +5,7 @@ import { appMetadata } from '../../config/app.js';
 import { classifyProposalResponse, proposalIdentity } from '../../domain/proposal.js';
 import {
   invokeRegisteredTriageAgent,
-  type ModelInvocation,
+  invokeStructuredModel,
   type ModelInvoker,
   type ModelRequest,
 } from './triage.js';
@@ -109,11 +109,6 @@ function safeFailure(input: CommentInput, reasonCode: string): CommentOutput {
   };
 }
 
-function failureCode(error: unknown): string {
-  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
-  return /timeout|timed out|aborted/iu.test(text) ? 'MODEL_TIMEOUT' : 'MODEL_RETRIES_EXHAUSTED';
-}
-
 async function callToolless<T extends z.ZodType>(input: {
   abortSignal?: AbortSignal;
   deadlineAt: number;
@@ -126,30 +121,20 @@ async function callToolless<T extends z.ZodType>(input: {
   skill?: string;
   now: () => number;
 }): Promise<{ error?: string; value?: z.infer<T> }> {
-  const timeoutMs = Math.max(0, input.deadlineAt - input.now());
-  if (timeoutMs === 0) return { error: 'RUN_BUDGET_EXHAUSTED' };
-  let result: ModelInvocation;
-  try {
-    result = await input.invokeModel(
-      {
-        activeTools: [],
-        includeWorkspace: false,
-        maxModelRetries: input.runInput.maxModelRetries,
-        maxSteps: input.runInput.maxStageSteps,
-        payload: input.payload,
-        phase: input.phase,
-        schema: input.schema,
-        ...(input.skill ? { skill: input.skill } : {}),
-        timeoutMs,
-      },
-      { ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}), mastra: input.mastra },
-    );
-  } catch (error) {
-    return { error: failureCode(error) };
-  }
-  if ((result.toolCalls?.length ?? 0) > 0) return { error: 'TOOL_CALL_ATTEMPTED' };
-  const parsed = input.schema.safeParse(result.object);
-  return parsed.success ? { value: parsed.data } : { error: 'MALFORMED_STRUCTURED_OUTPUT' };
+  return invokeStructuredModel({
+    ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}),
+    activeTools: [],
+    deadlineAt: input.deadlineAt,
+    invokeModel: input.invokeModel,
+    mastra: input.mastra,
+    maxModelRetries: input.runInput.maxModelRetries,
+    maxSteps: input.runInput.maxStageSteps,
+    now: input.now,
+    payload: input.payload,
+    phase: input.phase,
+    schema: input.schema,
+    ...(input.skill ? { skill: input.skill } : {}),
+  });
 }
 
 export function createTriageCommentWorkflow(options: TriageCommentWorkflowOptions = {}) {

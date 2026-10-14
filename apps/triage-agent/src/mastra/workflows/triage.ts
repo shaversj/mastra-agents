@@ -19,7 +19,6 @@ export type ModelPhase =
 
 export interface ModelRequest {
   activeTools?: string[];
-  includeWorkspace: boolean;
   maxModelRetries: number;
   maxSteps: number;
   payload: Readonly<Record<string, unknown>>;
@@ -38,6 +37,13 @@ export type ModelInvoker = (
   request: ModelRequest,
   runtime: { abortSignal?: AbortSignal; mastra: unknown },
 ) => Promise<ModelInvocation>;
+
+export type ModelInvocationFailure =
+  | 'MALFORMED_STRUCTURED_OUTPUT'
+  | 'MODEL_RETRIES_EXHAUSTED'
+  | 'MODEL_TIMEOUT'
+  | 'RUN_BUDGET_EXHAUSTED'
+  | 'TOOL_CALL_ATTEMPTED';
 
 const proposalSchema = z
   .object({
@@ -273,13 +279,64 @@ function failed(
   };
 }
 
-function remainingMs(state: InternalState, clock: () => number): number {
-  return Math.max(0, state.deadlineAt - clock());
+function toWorkflowOutput(state: InternalState): z.infer<typeof triageWorkflowOutputSchema> {
+  if (!state.state) throw new Error('TRIAGE_WORKFLOW_STATE_MISSING');
+  return {
+    attemptId: state.input.attemptId,
+    evidence: state.evidence,
+    ...(state.failureCode ? { failureCode: state.failureCode } : {}),
+    generation: state.input.generation,
+    mutationPlan: state.mutationPlan ?? null,
+    ...(state.proposal ? { proposal: state.proposal } : {}),
+    state: state.state,
+    stoppedAt: state.stoppedAt ?? 'admission',
+  };
 }
 
 function invocationFailure(error: unknown): 'MODEL_RETRIES_EXHAUSTED' | 'MODEL_TIMEOUT' {
   const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
   return /timeout|timed out|aborted/iu.test(text) ? 'MODEL_TIMEOUT' : 'MODEL_RETRIES_EXHAUSTED';
+}
+
+export async function invokeStructuredModel<T extends z.ZodType>(input: {
+  abortSignal?: AbortSignal;
+  activeTools?: string[];
+  deadlineAt: number;
+  invokeModel: ModelInvoker;
+  mastra: unknown;
+  maxModelRetries: number;
+  maxSteps: number;
+  now: () => number;
+  payload: Readonly<Record<string, unknown>>;
+  phase: ModelPhase;
+  schema: T;
+  skill?: string;
+}): Promise<{ error?: ModelInvocationFailure; value?: z.infer<T> }> {
+  const timeoutMs = Math.max(0, input.deadlineAt - input.now());
+  if (timeoutMs === 0) return { error: 'RUN_BUDGET_EXHAUSTED' };
+  let result: ModelInvocation;
+  try {
+    result = await input.invokeModel(
+      {
+        ...(input.activeTools ? { activeTools: input.activeTools } : {}),
+        maxModelRetries: input.maxModelRetries,
+        maxSteps: input.maxSteps,
+        payload: input.payload,
+        phase: input.phase,
+        schema: input.schema,
+        ...(input.skill ? { skill: input.skill } : {}),
+        timeoutMs,
+      },
+      { ...(input.abortSignal ? { abortSignal: input.abortSignal } : {}), mastra: input.mastra },
+    );
+  } catch (error) {
+    return { error: invocationFailure(error) };
+  }
+  if (input.activeTools?.length === 0 && (result.toolCalls?.length ?? 0) > 0) {
+    return { error: 'TOOL_CALL_ATTEMPTED' };
+  }
+  const parsed = input.schema.safeParse(result.object);
+  return parsed.success ? { value: parsed.data } : { error: 'MALFORMED_STRUCTURED_OUTPUT' };
 }
 
 async function invokeParsed<T extends z.ZodType>(input: {
@@ -291,37 +348,25 @@ async function invokeParsed<T extends z.ZodType>(input: {
   schema: T;
   state: InternalState;
 }): Promise<{ error?: NonNullable<InternalState['failureCode']>; value?: z.infer<T> }> {
-  const timeoutMs = remainingMs(input.state, input.clock);
-  if (timeoutMs === 0) return { error: 'RUN_BUDGET_EXHAUSTED' };
-  let result: ModelInvocation;
-  try {
-    result = await input.invokeModel(
-      {
-        ...(input.activeTools ? { activeTools: input.activeTools } : {}),
-        includeWorkspace: input.activeTools?.length !== 0,
-        maxModelRetries: input.state.input.maxModelRetries,
-        maxSteps: input.state.input.maxStageSteps,
-        payload: {
-          attemptId: input.state.input.attemptId,
-          evidence: input.state.evidence,
-          issue: input.state.input.issue,
-          repository: input.state.input.repository,
-          ...(input.state.candidateProposal ? { proposal: input.state.candidateProposal } : {}),
-        },
-        phase: input.phase,
-        schema: input.schema,
-        timeoutMs,
-      },
-      input.runtime,
-    );
-  } catch (error) {
-    return { error: invocationFailure(error) };
-  }
-  if (input.activeTools?.length === 0 && (result.toolCalls?.length ?? 0) > 0) {
-    return { error: 'TOOL_CALL_ATTEMPTED' };
-  }
-  const parsed = input.schema.safeParse(result.object);
-  return parsed.success ? { value: parsed.data } : { error: 'MALFORMED_STRUCTURED_OUTPUT' };
+  return invokeStructuredModel({
+    ...(input.runtime.abortSignal ? { abortSignal: input.runtime.abortSignal } : {}),
+    ...(input.activeTools ? { activeTools: input.activeTools } : {}),
+    deadlineAt: input.state.deadlineAt,
+    invokeModel: input.invokeModel,
+    mastra: input.runtime.mastra,
+    maxModelRetries: input.state.input.maxModelRetries,
+    maxSteps: input.state.input.maxStageSteps,
+    now: input.clock,
+    payload: {
+      attemptId: input.state.input.attemptId,
+      evidence: input.state.evidence,
+      issue: input.state.input.issue,
+      repository: input.state.input.repository,
+      ...(input.state.candidateProposal ? { proposal: input.state.candidateProposal } : {}),
+    },
+    phase: input.phase,
+    schema: input.schema,
+  });
 }
 
 function closeEarly(
@@ -442,29 +487,9 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
     inputSchema: internalSchema,
     outputSchema: triageWorkflowOutputSchema,
     execute: async ({ inputData, mastra, abortSignal }) => {
-      if (inputData.state) {
-        return {
-          attemptId: inputData.input.attemptId,
-          evidence: inputData.evidence,
-          ...(inputData.failureCode ? { failureCode: inputData.failureCode } : {}),
-          generation: inputData.input.generation,
-          mutationPlan: inputData.mutationPlan ?? null,
-          ...(inputData.proposal ? { proposal: inputData.proposal } : {}),
-          state: inputData.state,
-          stoppedAt: inputData.stoppedAt ?? 'admission',
-        };
-      }
+      if (inputData.state) return toWorkflowOutput(inputData);
       if (!inputData.candidateProposal) {
-        const rejected = failed(inputData, 'ADMISSION_REJECTED');
-        return {
-          attemptId: rejected.input.attemptId,
-          evidence: rejected.evidence,
-          failureCode: rejected.failureCode,
-          generation: rejected.input.generation,
-          mutationPlan: null,
-          state: 'failed' as const,
-          stoppedAt: 'admission' as const,
-        };
+        return toWorkflowOutput(failed(inputData, 'ADMISSION_REJECTED'));
       }
       const proposal = proposalIdentity(inputData.candidateProposal);
       const admitted =
@@ -475,15 +500,7 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
           proposal,
         }) ?? Promise.resolve(true)));
       if (!admitted) {
-        return {
-          attemptId: inputData.input.attemptId,
-          evidence: inputData.evidence,
-          failureCode: 'ADMISSION_REJECTED' as const,
-          generation: inputData.input.generation,
-          mutationPlan: null,
-          state: 'failed' as const,
-          stoppedAt: 'admission' as const,
-        };
+        return toWorkflowOutput(failed(inputData, 'ADMISSION_REJECTED'));
       }
 
       const report = await invokeParsed({
@@ -496,15 +513,7 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
         state: inputData,
       });
       if (report.error || !report.value) {
-        return {
-          attemptId: inputData.input.attemptId,
-          evidence: inputData.evidence,
-          failureCode: report.error ?? 'MALFORMED_STRUCTURED_OUTPUT',
-          generation: inputData.input.generation,
-          mutationPlan: null,
-          state: 'failed' as const,
-          stoppedAt: 'admission' as const,
-        };
+        return toWorkflowOutput(failed(inputData, report.error ?? 'MALFORMED_STRUCTURED_OUTPUT'));
       }
       const labels = await invokeParsed({
         activeTools: [],
@@ -516,15 +525,7 @@ export function createTriageWorkflow(options: TriageWorkflowOptions = {}) {
         state: inputData,
       });
       if (labels.error || !labels.value) {
-        return {
-          attemptId: inputData.input.attemptId,
-          evidence: inputData.evidence,
-          failureCode: labels.error ?? 'MALFORMED_STRUCTURED_OUTPUT',
-          generation: inputData.input.generation,
-          mutationPlan: null,
-          state: 'failed' as const,
-          stoppedAt: 'admission' as const,
-        };
+        return toWorkflowOutput(failed(inputData, labels.error ?? 'MALFORMED_STRUCTURED_OUTPUT'));
       }
       const selectedLabels = selectAllowedAncillaryLabels({
         allowedPackageLabels: inputData.input.allowedPackageLabels,

@@ -40,6 +40,23 @@ describe('per-issue lease decisions', () => {
     ).toThrowError('LEASE_DEADLINE_INVALID');
   });
 
+  it('rejects lease records with invalid repository or issue identity', () => {
+    expect(() =>
+      decideLeaseAcquisition({
+        candidate: { ...current, issueNumber: 0 },
+        current: null,
+        serverNow: '2026-10-14T12:00:00.000Z',
+      }),
+    ).toThrowError('LEASE_ISSUE_INVALID');
+    expect(() =>
+      decideLeaseAcquisition({
+        candidate: { ...current, repository: 'missing-owner' },
+        current: null,
+        serverNow: '2026-10-14T12:00:00.000Z',
+      }),
+    ).toThrowError('LEASE_REPOSITORY_INVALID');
+  });
+
   it('returns contention while the current run can still mutate', () => {
     expect(
       decideLeaseAcquisition({

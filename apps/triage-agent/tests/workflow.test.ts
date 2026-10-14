@@ -127,7 +127,6 @@ describe('triage workflow', () => {
     for (const phase of ['classify_outcome', 'draft_report', 'select_labels']) {
       expect(calls.find((call) => call.phase === phase)).toMatchObject({
         activeTools: [],
-        includeWorkspace: false,
       });
     }
   });
@@ -294,11 +293,10 @@ describe('comment workflow', () => {
       mentionedProposalId: proposal.id,
     });
     const confirmationCall = calls.find(({ phase }) => phase === 'classify_confirmation');
-    expect(confirmationCall).toMatchObject({ activeTools: [], includeWorkspace: false });
+    expect(confirmationCall).toMatchObject({ activeTools: [] });
     expect(confirmationCall).not.toHaveProperty('skill');
     expect(calls.find(({ phase }) => phase === 'draft_pr_content')).toMatchObject({
       activeTools: [],
-      includeWorkspace: false,
       skill: 'pr-skill',
     });
   });

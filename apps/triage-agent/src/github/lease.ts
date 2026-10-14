@@ -51,6 +51,12 @@ function validateLease(lease: LeaseRecord): void {
   if (!Number.isInteger(lease.workflowRunId) || lease.workflowRunId <= 0) {
     throw new Error('LEASE_WORKFLOW_RUN_INVALID');
   }
+  if (!Number.isInteger(lease.issueNumber) || lease.issueNumber <= 0) {
+    throw new Error('LEASE_ISSUE_INVALID');
+  }
+  if (!/^[^/\s]+\/[^/\s]+$/u.test(lease.repository)) {
+    throw new Error('LEASE_REPOSITORY_INVALID');
+  }
 }
 
 const terminalStatuses = new Set<WorkflowRunStatus>([
@@ -140,4 +146,25 @@ export function verifyLeaseOwnership(
     return { kind: 'lost', reason: 'mutation_deadline_reached' };
   }
   return { kind: 'current', lease: current };
+}
+
+export interface LeaseGuard {
+  assertCurrent(): Promise<void>;
+}
+
+export function createLeaseGuard(input: {
+  expected: { fencingToken: string; workflowRunId: number };
+  readCurrent(): Promise<{ lease: LeaseRecord; serverNow: string }>;
+}): LeaseGuard {
+  return {
+    async assertCurrent() {
+      const current = await input.readCurrent();
+      const ownership = verifyLeaseOwnership(current.lease, {
+        ...input.expected,
+        serverNow: current.serverNow,
+      });
+      if (ownership.kind === 'lost')
+        throw new Error(`LEASE_LOST_${ownership.reason.toUpperCase()}`);
+    },
+  };
 }
