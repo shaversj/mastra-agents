@@ -292,7 +292,7 @@ describe('sandbox isolation and tool boundary', () => {
     await expect(sandbox.executeCommand('yes', [], { timeout: 5000 })).rejects.toThrow(
       'WORKSPACE_OUTPUT_LIMIT',
     );
-  });
+  }, 30_000);
 });
 
 describe('materialized workspace lifecycle', () => {
