@@ -217,6 +217,12 @@ describe('sandbox isolation and tool boundary', () => {
     expect(readOnlyRoot?.success).toBe(true);
     const chainedCommand = await sandbox.executeCommand('true && false');
     expect(chainedCommand?.success).toBe(false);
+    const separatedOutput = await sandbox.executeCommand('sh', [
+      '-c',
+      'printf stdout-value; printf stderr-value >&2',
+    ]);
+    expect(separatedOutput?.stdout).toBe('stdout-value');
+    expect(separatedOutput?.stderr).toBe('stderr-value');
     const droppedCapabilities = await sandbox.executeCommand(
       "awk '/^Cap(Inh|Prm|Eff|Bnd|Amb):/ { print }' /proc/self/status",
     );
@@ -289,9 +295,7 @@ describe('sandbox isolation and tool boundary', () => {
     expect(readOnlyDependency?.stdout).toContain('PREPARED_READ_ONLY');
     expect(await readFile(preparedFile, 'utf8')).toBe('prepared\n');
 
-    await expect(
-      sandbox.executeCommand('node', ['-e', "process.stdout.write('x'.repeat(256 * 1024))"]),
-    ).rejects.toThrow('WORKSPACE_OUTPUT_LIMIT');
+    await expect(sandbox.executeCommand('yes')).rejects.toThrow('WORKSPACE_OUTPUT_LIMIT');
     await expect(sandbox.executeCommand('true')).resolves.toMatchObject({ success: true });
   }, 30_000);
 });

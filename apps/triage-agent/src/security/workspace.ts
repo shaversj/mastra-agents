@@ -179,13 +179,26 @@ function boundedCommand(command: string, args: string[], limits: CommandLimits):
   const invocation = args.length
     ? `${shellQuote(command)} ${args.map((argument) => shellQuote(argument)).join(' ')}`
     : command;
+  const retainedOutputBytes = limits.maxOutputBytes + 1;
+  const outputBoundedInvocation = [
+    'output_dir=$(mktemp -d /tmp/triage-output.XXXXXX) || exit 125',
+    'trap \'rm -rf -- "$output_dir"\' EXIT HUP INT TERM',
+    'mkfifo "$output_dir/stdout" "$output_dir/stderr" || exit 125',
+    `head -c ${retainedOutputBytes} < "$output_dir/stdout" & stdout_pid=$!`,
+    `head -c ${retainedOutputBytes} < "$output_dir/stderr" >&2 & stderr_pid=$!`,
+    `/bin/bash -c ${shellQuote(invocation)} > "$output_dir/stdout" 2> "$output_dir/stderr"`,
+    'command_status=$?',
+    'wait "$stdout_pid"',
+    'wait "$stderr_pid"',
+    'exit "$command_status"',
+  ].join('; ');
   const boundedInvocation = [
     `ulimit -t ${limits.cpuSeconds}`,
     `ulimit -v ${limits.addressSpaceKiB}`,
     `ulimit -u ${limits.maxProcesses}`,
     `ulimit -n ${limits.maxOpenFiles}`,
     `ulimit -f ${limits.fileSizeBlocks}`,
-    `exec /bin/bash -c ${shellQuote(invocation)}`,
+    `exec /bin/bash -c ${shellQuote(outputBoundedInvocation)}`,
   ].join('; ');
   return `exec /bin/bash -c ${shellQuote(boundedInvocation)}`;
 }
@@ -262,12 +275,10 @@ class BoundedDockerSandbox extends DockerSandbox {
 
     let resourceViolation: Error | undefined;
     let outputBytes = 0;
-    const processControl: { kill?: () => Promise<boolean> } = {};
     const countOutput = (data: string) => {
       outputBytes += Buffer.byteLength(data);
       if (outputBytes <= this.commandLimits.maxOutputBytes || resourceViolation) return;
       resourceViolation = new Error('WORKSPACE_OUTPUT_LIMIT');
-      void processControl.kill?.();
     };
     const handle = await this.processes.spawn(boundedCommand(command, args, this.commandLimits), {
       ...options,
@@ -278,8 +289,6 @@ class BoundedDockerSandbox extends DockerSandbox {
       stdinMode: 'ignore',
       timeout: Math.min(options.timeout ?? this.commandLimits.timeoutMs, remainingMs),
     });
-    processControl.kill = () => handle.kill();
-    if (resourceViolation) await handle.kill();
     let watchdogScan: Promise<void> | undefined;
     const scanWorkspace = () => {
       if (watchdogScan || resourceViolation) return;
