@@ -196,7 +196,10 @@ describe('sandbox isolation and tool boundary', () => {
       const result = await sandbox.executeCommand(
         'test -z "$GITHUB_TOKEN" && test -z "$OPENAI_API_KEY" && test ! -e .git',
       );
-      expect(result?.success).toBe(true);
+      expect(
+        result?.success,
+        JSON.stringify({ exitCode: result?.exitCode, stderr: result?.stderr }),
+      ).toBe(true);
 
       const deniedEgress = await sandbox.executeCommand(
         'node',
