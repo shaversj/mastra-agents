@@ -31,7 +31,7 @@ export function selectCommentWindow(
 }
 
 export async function loadBoundedCommentWindow(input: {
-  activeMarkerFound(comment: IssueComment): boolean;
+  isActiveMarker(comment: IssueComment): boolean;
   fetchPage(page: number): Promise<readonly IssueComment[]>;
   maxBodyCharacters?: number;
   maxComments: number;
@@ -40,30 +40,32 @@ export async function loadBoundedCommentWindow(input: {
 }): Promise<
   CommentWindow & {
     activeMarkerComment: IssueComment | null;
-    activeMarkerFound: boolean;
     pagesRead: number;
   }
 > {
-  if (!Number.isInteger(input.maxPages) || input.maxPages < 1) {
+  if (!Number.isInteger(input.maxPages) || input.maxPages < 1 || input.maxPages > 20) {
     throw new Error('COMMENT_PAGE_LIMIT_INVALID');
   }
   const comments: IssueComment[] = [];
-  let foundMarker = false;
   let activeMarkerComment: IssueComment | null = null;
   let foundTrigger = false;
   let pagesRead = 0;
   for (let page = 1; page <= input.maxPages; page += 1) {
     const values = await input.fetchPage(page);
+    if (values.length > 100) throw new Error('COMMENT_PAGE_SIZE_INVALID');
     pagesRead = page;
     for (const comment of values) {
-      if (!foundMarker && input.activeMarkerFound(comment)) {
-        foundMarker = true;
-        activeMarkerComment = comment;
+      const boundedComment = {
+        ...comment,
+        body: comment.body.slice(0, input.maxBodyCharacters ?? 8_000),
+      };
+      if (activeMarkerComment === null && input.isActiveMarker(comment)) {
+        activeMarkerComment = boundedComment;
       }
       if (comment.id === input.triggerCommentId) foundTrigger = true;
-      comments.push(comment);
+      comments.push(boundedComment);
     }
-    if ((foundMarker && foundTrigger) || values.length === 0) break;
+    if ((activeMarkerComment !== null && foundTrigger) || values.length === 0) break;
   }
   const window = selectCommentWindow(comments, {
     ...(input.maxBodyCharacters === undefined
@@ -72,5 +74,5 @@ export async function loadBoundedCommentWindow(input: {
     maxComments: input.maxComments,
     triggerCommentId: input.triggerCommentId,
   });
-  return { ...window, activeMarkerComment, activeMarkerFound: foundMarker, pagesRead };
+  return { ...window, activeMarkerComment, pagesRead };
 }

@@ -11,14 +11,13 @@ function repositoryVisibility(value: string | undefined): RepositoryVisibility {
 
 export function runAction(environment: NodeJS.ProcessEnv = process.env): void {
   const inputs = parseActionInputs(environment);
-  const preflight = preflightAction(inputs, {
+  const route = 'model';
+  preflightAction(inputs, {
     repositoryVisibility: repositoryVisibility(environment.TRIAGE_REPOSITORY_VISIBILITY),
-    route: 'model',
+    route,
   });
 
-  process.stdout.write(
-    `${JSON.stringify({ appId: appMetadata.appId, route: preflight.route, status: 'ready' })}\n`,
-  );
+  process.stdout.write(`${JSON.stringify({ appId: appMetadata.appId, route, status: 'ready' })}\n`);
 }
 
 try {

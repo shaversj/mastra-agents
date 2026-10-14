@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,7 +13,7 @@ try {
   const fixtureBundleDirectory = join(fixtureRoot, 'dist');
   const fixtureBundle = join(fixtureBundleDirectory, 'index.mjs');
   await mkdir(fixtureBundleDirectory, { recursive: true });
-  await writeFile(fixtureBundle, await readFile(sourceBundle));
+  await copyFile(sourceBundle, fixtureBundle);
 
   const { stderr, stdout } = await execFileAsync(process.execPath, [fixtureBundle], {
     cwd: fixtureRoot,

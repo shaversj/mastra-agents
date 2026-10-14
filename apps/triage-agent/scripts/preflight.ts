@@ -2,9 +2,10 @@ import { parseActionInputs } from '../src/action/inputs.js';
 import { preflightAction } from '../src/action/preflight.js';
 
 const inputs = parseActionInputs();
-const result = preflightAction(inputs, {
+const route = 'model';
+preflightAction(inputs, {
   repositoryVisibility: 'public',
-  route: 'model',
+  route,
 });
 
-process.stdout.write(`Configuration valid for ${result.route} route\n`);
+process.stdout.write(`Configuration valid for ${route} route\n`);

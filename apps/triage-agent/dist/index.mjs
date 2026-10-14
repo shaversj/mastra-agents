@@ -19672,22 +19672,48 @@ function date4(params) {
   return _coercedDate(ZodDate, params);
 }
 
+// src/domain/lifecycle.ts
+var lifecycleStates = [
+  "needs_triage",
+  "not_actionable",
+  "needs_reproduction",
+  "skipped",
+  "unable_to_reproduce",
+  "unable_to_fix",
+  "failed",
+  "fix_pending",
+  "fix_rejected",
+  "fix_verified"
+];
+var defaultLifecycleLabels = {
+  failed: "triage: failed",
+  fix_pending: "triage: fix pending",
+  fix_rejected: "triage: fix rejected",
+  fix_verified: "triage: fix verified",
+  needs_reproduction: "triage: needs reproduction",
+  needs_triage: "triage: needs triage",
+  not_actionable: "triage: not actionable",
+  skipped: "triage: skipped",
+  unable_to_fix: "triage: unable to fix",
+  unable_to_reproduce: "triage: unable to reproduce"
+};
+
 // src/action/inputs.ts
 var booleanSchema = external_exports.enum(["true", "false"]);
 var activationPolicySchema = external_exports.enum(["automatic-public", "trusted"]);
 var publicationTokenKindSchema = external_exports.enum(["github-token", "workflow-triggering"]);
-var lifecycleLabelKeys = [
-  "needsTriage",
-  "notActionable",
-  "needsReproduction",
-  "skipped",
-  "unableToReproduce",
-  "unableToFix",
-  "failed",
-  "fixPending",
-  "fixRejected",
-  "fixVerified"
-];
+var lifecycleLabelInputs = {
+  failed: "label-failed",
+  fix_pending: "label-fix-pending",
+  fix_rejected: "label-fix-rejected",
+  fix_verified: "label-fix-verified",
+  needs_reproduction: "label-needs-reproduction",
+  needs_triage: "label-needs-triage",
+  not_actionable: "label-not-actionable",
+  skipped: "label-skipped",
+  unable_to_fix: "label-unable-to-fix",
+  unable_to_reproduce: "label-unable-to-reproduce"
+};
 function getInput(environment, name) {
   const canonicalName = `INPUT_${name.replaceAll(" ", "_").toUpperCase()}`;
   const legacyName = `INPUT_${name.replaceAll(/[- ]/gu, "_").toUpperCase()}`;
@@ -19761,21 +19787,13 @@ function enumInput(environment, name, schema, fallback) {
   return result.data;
 }
 function parseActionInputs(environment = process.env) {
-  const labels = {
-    failed: getInput(environment, "label-failed") || "triage: failed",
-    fixPending: getInput(environment, "label-fix-pending") || "triage: fix pending",
-    fixRejected: getInput(environment, "label-fix-rejected") || "triage: fix rejected",
-    fixVerified: getInput(environment, "label-fix-verified") || "triage: fix verified",
-    needsReproduction: getInput(environment, "label-needs-reproduction") || "triage: needs reproduction",
-    needsTriage: getInput(environment, "label-needs-triage") || "triage: needs triage",
-    notActionable: getInput(environment, "label-not-actionable") || "triage: not actionable",
-    prFixVerified: getInput(environment, "pr-label-fix-verified") || "fix verified",
-    skipped: getInput(environment, "label-skipped") || "triage: skipped",
-    unableToFix: getInput(environment, "label-unable-to-fix") || "triage: unable to fix",
-    unableToReproduce: getInput(environment, "label-unable-to-reproduce") || "triage: unable to reproduce"
-  };
-  const lifecycleLabels = lifecycleLabelKeys.map((key) => labels[key]);
-  if (new Set(lifecycleLabels).size !== lifecycleLabels.length) {
+  const labels = Object.fromEntries(
+    lifecycleStates.map((state) => [
+      state,
+      getInput(environment, lifecycleLabelInputs[state]) || defaultLifecycleLabels[state]
+    ])
+  );
+  if (new Set(Object.values(labels)).size !== lifecycleStates.length) {
     throw new Error("Action inputs contain duplicate lifecycle labels");
   }
   const anthropicApiKey = optionalInput(environment, "anthropic-api-key");
@@ -19831,6 +19849,7 @@ function parseActionInputs(environment = process.env) {
     ...openaiApiKey ? { openaiApiKey } : {},
     previewAllowedHosts: previewHosts(environment),
     ...previewCommand ? { previewCommand } : {},
+    prFixVerifiedLabel: getInput(environment, "pr-label-fix-verified") || "fix verified",
     ...prSkill ? { prSkill } : {},
     prSkillName: getInput(environment, "pr-skill-name") || "pr-writer",
     publicationTokenKind,
@@ -19862,12 +19881,6 @@ function preflightAction(inputs, context) {
       throw new Error("Checkout credential hygiene validation failed");
     }
   }
-  return {
-    activationPolicy: inputs.activationPolicy,
-    maxModelEvents: inputs.maxModelEvents,
-    publicationTokenKind: inputs.publicationTokenKind,
-    route: context.route
-  };
 }
 
 // src/config/app.ts
@@ -19891,14 +19904,13 @@ function repositoryVisibility(value) {
 }
 function runAction(environment = process.env) {
   const inputs = parseActionInputs(environment);
-  const preflight = preflightAction(inputs, {
+  const route = "model";
+  preflightAction(inputs, {
     repositoryVisibility: repositoryVisibility(environment.TRIAGE_REPOSITORY_VISIBILITY),
-    route: "model"
+    route
   });
-  process.stdout.write(
-    `${JSON.stringify({ appId: appMetadata.appId, route: preflight.route, status: "ready" })}
-`
-  );
+  process.stdout.write(`${JSON.stringify({ appId: appMetadata.appId, route, status: "ready" })}
+`);
 }
 try {
   runAction();

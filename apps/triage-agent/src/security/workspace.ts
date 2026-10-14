@@ -30,8 +30,9 @@ import {
 import {
   assertCredentialFreeContent,
   assertWorkspaceCeilings,
+  assertWorkspaceUsageCeilings,
   defaultDiffLimits,
-  snapshotWorkspace,
+  measureWorkspaceUsage,
   type DiffLimits,
   type WorkspaceSnapshot,
 } from './diff-policy.js';
@@ -39,7 +40,6 @@ import {
   assertSafeGitEnvironment,
   secureGitEnvironment,
   trustedExecutableDirectories,
-  trustedExecutablePath,
 } from './git-environment.js';
 
 export interface CommandLimits {
@@ -207,19 +207,22 @@ class BoundedLocalSandbox extends LocalSandbox {
     });
     processControl.kill = () => handle.kill();
     if (resourceViolation) await handle.kill();
-    let checking = false;
-    const watchdog = setInterval(() => {
-      if (checking || resourceViolation) return;
-      checking = true;
-      void assertWorkspaceCeilings(this.workingDirectory, this.diffLimits)
-        .catch((error: unknown) => {
+    let watchdogScan: Promise<void> | undefined;
+    const scanWorkspace = () => {
+      if (watchdogScan || resourceViolation) return;
+      watchdogScan = assertWorkspaceUsageCeilings(this.workingDirectory, this.diffLimits)
+        .then(() => undefined)
+        .catch(async (error: unknown) => {
           resourceViolation =
             error instanceof Error ? error : new Error('WORKSPACE_RESOURCE_LIMIT');
-          return handle.kill();
+          await handle.kill();
         })
         .finally(() => {
-          checking = false;
+          watchdogScan = undefined;
         });
+    };
+    const watchdog = setInterval(() => {
+      scanWorkspace();
     }, 250);
     watchdog.unref();
 
@@ -227,14 +230,17 @@ class BoundedLocalSandbox extends LocalSandbox {
       const result = await handle.wait(
         options.abortSignal ? { abortSignal: options.abortSignal } : undefined,
       );
+      clearInterval(watchdog);
+      await watchdogScan;
       if (resourceViolation) throw resourceViolation;
-      await assertWorkspaceCeilings(this.workingDirectory, this.diffLimits);
+      await assertWorkspaceUsageCeilings(this.workingDirectory, this.diffLimits);
       const redactedResult = { ...result };
       delete redactedResult.args;
       delete redactedResult.command;
       return redactedResult;
     } finally {
       clearInterval(watchdog);
+      await watchdogScan;
       this.processes.release(handle.pid);
     }
   }
@@ -444,7 +450,7 @@ async function assertMaterializationCeilings(
   let materializedBytes = workspaceUsage.totalBytes;
   let materializedInodes = workspaceUsage.totalInodes;
   for (const preparedPath of preparedReadOnlyPaths) {
-    const preparedUsage = await snapshotWorkspace(preparedPath);
+    const preparedUsage = await measureWorkspaceUsage(preparedPath);
     materializedBytes += preparedUsage.totalBytes;
     materializedInodes += preparedUsage.totalInodes;
   }
@@ -583,11 +589,3 @@ export async function createMaterializedWorkspace<
     throw error;
   }
 }
-
-export async function readPreparedBuildOutput(path: string, maxBytes = 4096): Promise<string> {
-  const content = await readFile(path);
-  if (content.byteLength > maxBytes) throw new Error('WORKSPACE_OUTPUT_TOO_LARGE');
-  return content.toString('utf8');
-}
-
-export { trustedExecutablePath };

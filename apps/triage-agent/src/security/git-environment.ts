@@ -23,8 +23,6 @@ const prohibitedGitEnvironment = [
   'GIT_WORK_TREE',
 ] as const;
 
-export const trustedExecutablePath = fixedExecutablePath;
-
 export function assertSafeGitEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
 ): void {

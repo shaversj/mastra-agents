@@ -12,14 +12,7 @@ export interface PreflightContext {
   triageSkillPresent?: boolean;
 }
 
-export interface PreflightResult {
-  activationPolicy: ActionInputs['activationPolicy'];
-  maxModelEvents: number;
-  publicationTokenKind: ActionInputs['publicationTokenKind'];
-  route: ActionRoute;
-}
-
-export function preflightAction(inputs: ActionInputs, context: PreflightContext): PreflightResult {
+export function preflightAction(inputs: ActionInputs, context: PreflightContext): void {
   if (context.route === 'model') {
     if (context.repositoryVisibility !== 'public') {
       throw new Error('Model routes support public repositories only');
@@ -37,11 +30,4 @@ export function preflightAction(inputs: ActionInputs, context: PreflightContext)
       throw new Error('Checkout credential hygiene validation failed');
     }
   }
-
-  return {
-    activationPolicy: inputs.activationPolicy,
-    maxModelEvents: inputs.maxModelEvents,
-    publicationTokenKind: inputs.publicationTokenKind,
-    route: context.route,
-  };
 }

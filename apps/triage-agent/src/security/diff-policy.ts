@@ -31,6 +31,11 @@ export interface WorkspaceSnapshot {
   totalInodes: number;
 }
 
+export interface WorkspaceUsage {
+  totalBytes: number;
+  totalInodes: number;
+}
+
 export interface AdmittedChange {
   kind: 'added' | 'deleted' | 'modified';
   path: string;
@@ -128,6 +133,43 @@ async function walk(root: string, directory = ''): Promise<Array<[string, Snapsh
     files.push([path, { digest: digest(content), kind: 'file', size: content.byteLength }]);
   }
   return files;
+}
+
+async function measure(root: string, directory = ''): Promise<WorkspaceUsage> {
+  const entries = await readdir(resolve(root, directory), { withFileTypes: true });
+  let totalBytes = 0;
+  let totalInodes = 0;
+  for (const entry of entries) {
+    const path = directory ? `${directory}/${entry.name}` : entry.name;
+    const metadata = await lstat(resolve(root, path));
+    totalInodes += 1;
+    if (metadata.isDirectory()) {
+      const nested = await measure(root, path);
+      totalBytes += nested.totalBytes;
+      totalInodes += nested.totalInodes;
+    } else if (metadata.isFile() || metadata.isSymbolicLink()) {
+      totalBytes += metadata.size;
+    } else {
+      throw new Error('DIFF_SPECIAL_FILE');
+    }
+  }
+  return { totalBytes, totalInodes };
+}
+
+export async function measureWorkspaceUsage(workspaceRoot: string): Promise<WorkspaceUsage> {
+  return measure(await realpath(workspaceRoot));
+}
+
+export async function assertWorkspaceUsageCeilings(
+  workspaceRoot: string,
+  limits: DiffLimits = defaultDiffLimits,
+): Promise<WorkspaceUsage> {
+  const usage = await measureWorkspaceUsage(workspaceRoot);
+  if (usage.totalBytes > limits.maxWorkspaceBytes) throw new Error('WORKSPACE_BYTES_EXCEEDED');
+  if (usage.totalInodes > limits.maxWorkspaceInodes) {
+    throw new Error('WORKSPACE_INODES_EXCEEDED');
+  }
+  return usage;
 }
 
 export async function snapshotWorkspace(workspaceRoot: string): Promise<WorkspaceSnapshot> {

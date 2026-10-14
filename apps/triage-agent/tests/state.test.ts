@@ -63,7 +63,7 @@ describe('GitHub event projection and lifecycle routing', () => {
       [{ authorLogin: 'other', body: 'must not be read', id: 5002 }],
     ];
     const result = await loadBoundedCommentWindow({
-      activeMarkerFound: ({ authorLogin, body }) =>
+      isActiveMarker: ({ authorLogin, body }) =>
         authorLogin === 'triage-action' && body.includes('<!-- marker -->'),
       fetchPage: async (page) => pages[page - 1] ?? [],
       maxComments: 2,
@@ -73,7 +73,6 @@ describe('GitHub event projection and lifecycle routing', () => {
 
     expect(result).toMatchObject({
       activeMarkerComment: { id: 4999 },
-      activeMarkerFound: true,
       pagesRead: 2,
       triggeringComment: { id: 5001 },
     });

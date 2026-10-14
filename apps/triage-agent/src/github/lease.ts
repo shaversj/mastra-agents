@@ -132,13 +132,8 @@ export function verifyLeaseOwnership(
   current: LeaseRecord,
   expected: { fencingToken: string; serverNow: string; workflowRunId: number },
 ): LeaseOwnershipDecision {
-  validateLease(current);
-  if (current.workflowRunId !== expected.workflowRunId) {
-    return { kind: 'lost', reason: 'workflow_run_changed' };
-  }
-  if (current.fencingToken !== expected.fencingToken) {
-    return { kind: 'lost', reason: 'fencing_token_changed' };
-  }
+  const identity = decideLeaseRelease(current, expected);
+  if (identity.kind === 'lost') return identity;
   if (
     timestamp(expected.serverNow, 'SERVER_TIME') >= timestamp(current.mutationDeadline, 'DEADLINE')
   ) {

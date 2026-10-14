@@ -1,22 +1,29 @@
 import { z } from 'zod';
 
+import {
+  defaultLifecycleLabels,
+  lifecycleStates,
+  type LifecycleLabels,
+  type LifecycleState,
+} from '../domain/lifecycle.js';
+
 type Environment = Readonly<Record<string, string | undefined>>;
 
 const booleanSchema = z.enum(['true', 'false']);
 const activationPolicySchema = z.enum(['automatic-public', 'trusted']);
 const publicationTokenKindSchema = z.enum(['github-token', 'workflow-triggering']);
-const lifecycleLabelKeys = [
-  'needsTriage',
-  'notActionable',
-  'needsReproduction',
-  'skipped',
-  'unableToReproduce',
-  'unableToFix',
-  'failed',
-  'fixPending',
-  'fixRejected',
-  'fixVerified',
-] as const;
+const lifecycleLabelInputs: Readonly<Record<LifecycleState, string>> = {
+  failed: 'label-failed',
+  fix_pending: 'label-fix-pending',
+  fix_rejected: 'label-fix-rejected',
+  fix_verified: 'label-fix-verified',
+  needs_reproduction: 'label-needs-reproduction',
+  needs_triage: 'label-needs-triage',
+  not_actionable: 'label-not-actionable',
+  skipped: 'label-skipped',
+  unable_to_fix: 'label-unable-to-fix',
+  unable_to_reproduce: 'label-unable-to-reproduce',
+};
 
 export interface ActionInputs {
   activationPolicy: z.infer<typeof activationPolicySchema>;
@@ -29,11 +36,12 @@ export interface ActionInputs {
   buildCommand?: string;
   cloudflareAccountId?: string;
   cloudflareApiKey?: string;
-  labels: Record<(typeof lifecycleLabelKeys)[number], string> & { prFixVerified: string };
+  labels: LifecycleLabels;
   maxModelEvents: number;
   openaiApiKey?: string;
   previewAllowedHosts: string[];
   previewCommand?: string;
+  prFixVerifiedLabel: string;
   prSkill?: string;
   prSkillName: string;
   publicationTokenKind: z.infer<typeof publicationTokenKindSchema>;
@@ -150,23 +158,13 @@ function enumInput<T extends z.ZodEnum>(
 }
 
 export function parseActionInputs(environment: Environment = process.env): ActionInputs {
-  const labels = {
-    failed: getInput(environment, 'label-failed') || 'triage: failed',
-    fixPending: getInput(environment, 'label-fix-pending') || 'triage: fix pending',
-    fixRejected: getInput(environment, 'label-fix-rejected') || 'triage: fix rejected',
-    fixVerified: getInput(environment, 'label-fix-verified') || 'triage: fix verified',
-    needsReproduction:
-      getInput(environment, 'label-needs-reproduction') || 'triage: needs reproduction',
-    needsTriage: getInput(environment, 'label-needs-triage') || 'triage: needs triage',
-    notActionable: getInput(environment, 'label-not-actionable') || 'triage: not actionable',
-    prFixVerified: getInput(environment, 'pr-label-fix-verified') || 'fix verified',
-    skipped: getInput(environment, 'label-skipped') || 'triage: skipped',
-    unableToFix: getInput(environment, 'label-unable-to-fix') || 'triage: unable to fix',
-    unableToReproduce:
-      getInput(environment, 'label-unable-to-reproduce') || 'triage: unable to reproduce',
-  };
-  const lifecycleLabels = lifecycleLabelKeys.map((key) => labels[key]);
-  if (new Set(lifecycleLabels).size !== lifecycleLabels.length) {
+  const labels = Object.fromEntries(
+    lifecycleStates.map((state) => [
+      state,
+      getInput(environment, lifecycleLabelInputs[state]) || defaultLifecycleLabels[state],
+    ]),
+  ) as unknown as LifecycleLabels;
+  if (new Set(Object.values(labels)).size !== lifecycleStates.length) {
     throw new Error('Action inputs contain duplicate lifecycle labels');
   }
 
@@ -226,6 +224,7 @@ export function parseActionInputs(environment: Environment = process.env): Actio
     ...(openaiApiKey ? { openaiApiKey } : {}),
     previewAllowedHosts: previewHosts(environment),
     ...(previewCommand ? { previewCommand } : {}),
+    prFixVerifiedLabel: getInput(environment, 'pr-label-fix-verified') || 'fix verified',
     ...(prSkill ? { prSkill } : {}),
     prSkillName: getInput(environment, 'pr-skill-name') || 'pr-writer',
     publicationTokenKind,
