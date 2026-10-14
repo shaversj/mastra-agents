@@ -96,8 +96,9 @@ jobs:
         if: matrix.app == 'triage-agent'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          sudo apt-get install --yes bubblewrap util-linux
           bwrap --version
+          unshare --version
 
       - name: Validate selected application
         env:

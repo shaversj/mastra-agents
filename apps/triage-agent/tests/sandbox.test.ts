@@ -193,6 +193,8 @@ describe('sandbox isolation and tool boundary', () => {
         throw new Error('fixture sandbox unavailable');
       const info = await sandbox.getInfo();
       expect(info?.metadata?.isolation).toBe('bwrap');
+      const chainedCommand = await sandbox.executeCommand('true && false');
+      expect(chainedCommand?.success).toBe(false);
       const result = await sandbox.executeCommand(
         'test -z "$GITHUB_TOKEN" && test -z "$OPENAI_API_KEY" && test ! -e .git',
       );

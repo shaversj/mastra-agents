@@ -296552,7 +296552,7 @@ function boundedCommand(command, args, limits) {
     `ulimit -u ${limits.maxProcesses}`,
     `ulimit -n ${limits.maxOpenFiles}`,
     `ulimit -f ${limits.fileSizeBlocks}`,
-    `exec ${invocation}`
+    `exec /bin/bash -c ${shellQuote2(invocation)}`
   ].join("; ");
   return `exec /bin/bash -c ${shellQuote2(boundedInvocation)}`;
 }
@@ -296571,6 +296571,20 @@ var BoundedLocalSandbox = class extends LocalSandbox {
   }
   drainCommandEvidence() {
     return this.commandEvidence.splice(0);
+  }
+  wrapCommandForIsolation(command) {
+    const wrapped = super.wrapCommandForIsolation(command);
+    if (this.isolation !== "bwrap") return wrapped;
+    const networkNamespaceIndex = wrapped.args.indexOf("--unshare-net");
+    if (wrapped.command !== "bwrap" || networkNamespaceIndex === -1) {
+      throw new Error("SANDBOX_NETWORK_ISOLATION_INVALID");
+    }
+    const args = [...wrapped.args];
+    args.splice(networkNamespaceIndex, 1);
+    return {
+      args: ["--user", "--map-root-user", "--net", "--", wrapped.command, ...args],
+      command: "/usr/bin/unshare"
+    };
   }
   async executeCommand(command, args = [], options2 = {}) {
     const kind = /(?:^|[\/ -])(?:test|spec|check)(?:$|[ /-])/iu.test(`${command} ${args.join(" ")}`) ? "test" : "command";

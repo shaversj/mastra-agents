@@ -177,7 +177,7 @@ function boundedCommand(command: string, args: string[], limits: CommandLimits):
     `ulimit -u ${limits.maxProcesses}`,
     `ulimit -n ${limits.maxOpenFiles}`,
     `ulimit -f ${limits.fileSizeBlocks}`,
-    `exec ${invocation}`,
+    `exec /bin/bash -c ${shellQuote(invocation)}`,
   ].join('; ');
   return `exec /bin/bash -c ${shellQuote(boundedInvocation)}`;
 }
@@ -199,6 +199,25 @@ class BoundedLocalSandbox extends LocalSandbox {
 
   drainCommandEvidence(): SandboxCommandEvidence[] {
     return this.commandEvidence.splice(0);
+  }
+
+  override wrapCommandForIsolation(command: string): { args: string[]; command: string } {
+    const wrapped = super.wrapCommandForIsolation(command);
+    if (this.isolation !== 'bwrap') return wrapped;
+
+    const networkNamespaceIndex = wrapped.args.indexOf('--unshare-net');
+    if (wrapped.command !== 'bwrap' || networkNamespaceIndex === -1) {
+      throw new Error('SANDBOX_NETWORK_ISOLATION_INVALID');
+    }
+
+    const args = [...wrapped.args];
+    args.splice(networkNamespaceIndex, 1);
+    // Hosted runners block bwrap's loopback netlink setup; unshare creates the same
+    // empty network namespace without configuring loopback.
+    return {
+      args: ['--user', '--map-root-user', '--net', '--', wrapped.command, ...args],
+      command: '/usr/bin/unshare',
+    };
   }
 
   override async executeCommand(

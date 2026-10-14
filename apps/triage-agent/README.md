@@ -39,7 +39,7 @@ jobs:
           persist-credentials: false
 
       - name: Install the Linux sandbox
-        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
+        run: sudo apt-get update && sudo apt-get install --yes bubblewrap util-linux
 
       - name: Run Mastra triage
         uses: shaversj/mastra-agents/apps/triage-agent@66309dfb2c0d6eabd65e542d753172e293f2edad
