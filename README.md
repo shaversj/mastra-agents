@@ -1,8 +1,8 @@
 # Mastra Agents
 
-A pnpm workspace for Mastra agents that build, validate, and deploy independently. Each directory under `apps/` is one deployment unit with its own manifest, runtime configuration, tests, generated server, and container image.
+A pnpm workspace for Mastra agents that build, validate, and deploy independently. Each directory under `apps/` is one deployment unit with its own manifest, runtime configuration, tests, and primary deployable artifact.
 
-The reference apps are `@mastra-agents/researcher-agent` and `@mastra-agents/writer-agent`. `@mastra-agents/incident-triage-agent` is the stateful pattern, with independently deployable API and worker roles in one image.
+The reference apps are `@mastra-agents/researcher-agent` and `@mastra-agents/writer-agent`. `@mastra-agents/incident-triage-agent` is the stateful pattern, with independently deployable API and worker roles in one image. `@mastra-agents/triage-agent` is an independently releasable GitHub Action for Mastra-powered issue triage and fix proposals.
 
 ## Prerequisites
 
@@ -18,7 +18,7 @@ pnpm check:repo
 pnpm check
 ```
 
-`check:repo` validates root formatting, linting, types, package boundaries, smoke helpers, and CI selection without building every app. `check` runs that gate and then each app's complete check, including its generated-server smoke test.
+`check:repo` validates root formatting, linting, types, package boundaries, deployable-artifact contracts, smoke helpers, and CI selection without building every app. `check` runs that gate and then each app's complete check.
 
 Run only one app's checks with a fail-safe workspace filter:
 
@@ -26,6 +26,7 @@ Run only one app's checks with a fail-safe workspace filter:
 pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run check
 pnpm --filter @mastra-agents/writer-agent --fail-if-no-match run check
 pnpm --filter @mastra-agents/incident-triage-agent --fail-if-no-match run check
+pnpm --filter @mastra-agents/triage-agent --fail-if-no-match run check
 ```
 
 Default checks are model-free: they validate configuration, registration, operational endpoints, authorization boundaries, and graceful shutdown without sending a model request or requiring a provider credential. The incident app has separate real-Postgres, image, and opt-in live-certification tiers documented in its app README.
@@ -45,16 +46,17 @@ pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run build
 pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run test:server
 ```
 
-To build and smoke the app's non-root Linux image:
+To smoke an app's primary production artifact:
 
 ```sh
-pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run image:smoke
+pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run artifact:smoke
 ```
 
-The repository builds and smokes local images only. It does not publish images, create releases, or deploy infrastructure. The reference servers do not yet implement application authentication; never expose them publicly without authenticated ingress. The incident app authenticates its own routes, but should still be deployed behind private, authenticated ingress.
+The repository builds and smokes local production artifacts only. It does not publish artifacts, create releases, or deploy infrastructure. The reference servers do not yet implement application authentication; never expose them publicly without authenticated ingress. The incident app authenticates its own routes, but should still be deployed behind private, authenticated ingress.
 
 ## Project guides
 
 - [Architecture](docs/architecture.md) explains deployment boundaries, ownership, generated artifacts, and affected-app CI.
 - [Adding an agent](docs/adding-agent.md) is the checklist for creating another independent app.
 - [Incident triage agent](apps/incident-triage-agent/README.md) documents its stateful operating and safety contract.
+- [GitHub triage agent](apps/triage-agent/README.md) documents immutable Action installation, repository preparation, and release safety.

@@ -2,7 +2,7 @@
 
 ## One app is one deployment boundary
 
-Every `apps/<name>/` directory is a complete Mastra application. It owns its `package.json`, runtime dependencies, environment contract, source, tests, Mastra build output, and Dockerfile. Root configuration coordinates the workspace but does not own app-specific providers, prompts, tools, or runtime libraries.
+Every `apps/<name>/` directory is a complete Mastra application. It owns its `package.json`, runtime dependencies, environment contract, source, tests, Mastra build output, and primary deployable artifact. Server apps package that artifact as a Docker image; action-native apps may instead commit the bundle required by their host runtime. Root configuration coordinates the workspace but does not own app-specific providers, prompts, tools, or runtime libraries.
 
 Apps may not import another app's source. Repository tests enforce that boundary. Reusable runtime code belongs in a workspace package under `packages/` only after at least two apps demonstrate the same stable need. A consuming app must then declare the workspace dependency and import through the package's public exports.
 
@@ -10,7 +10,7 @@ Apps may not import another app's source. Repository tests enforce that boundary
 
 Each app defines `packageName`, `appId`, and `agentId` once in `src/config/app.ts`. Its Mastra registration, tests, image smoke harness, and CI use that app-owned metadata. The reference apps register one agent each. The incident app also registers its durable workflow and deterministic release scorer.
 
-`mastra build` writes a self-contained server to the app's `.mastra/output`. The Docker build compiles that output inside Linux and copies only the selected app's generated server into a slim runtime image. The image runs as a non-root user and does not depend on a repository mount or sibling app source.
+Server apps use `mastra build` to write a self-contained server to `.mastra/output`. Their Docker build compiles that output inside Linux and copies only the selected app's generated server into a slim runtime image. The image runs as a non-root user and does not depend on a repository mount or sibling app source.
 
 The black-box server contract is:
 
@@ -28,9 +28,11 @@ Local processes default to `127.0.0.1`. Images listen inside their container on 
 
 The migration job must finish before API and workers become ready. Workers use fenced leases and deterministic workflow run IDs, stop claiming new work after `SIGTERM`, and drain the current operation before exit. The image contains generated runtime output, production dependencies, and SQL migrations only; it runs as the non-root `node` user.
 
+Every app exposes `artifact:smoke` as the black-box check for its primary production artifact. Server apps delegate it to their existing `image:smoke` script. An action-native app owns a host-runtime smoke test instead, so CI validates what consumers execute without requiring an unused container.
+
 ## Validation and affected-app CI
 
-The root `check:repo` gate always validates shared tooling and boundary rules. The separate application matrix runs each selected package's `check` and `image:smoke`; CI never publishes or deploys an image.
+The root `check:repo` gate always validates shared tooling, package boundaries, and the required `check` plus `artifact:smoke` scripts. The separate application matrix runs both scripts for each selected package; CI never publishes or deploys an artifact.
 
 Selection is conservative and dependency-aware:
 

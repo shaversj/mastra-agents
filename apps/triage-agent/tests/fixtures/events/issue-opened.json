@@ -1,0 +1,21 @@
+{
+  "action": "opened",
+  "repository": {
+    "id": 1001,
+    "full_name": "example/widgets",
+    "visibility": "public",
+    "default_branch": "develop",
+    "owner": { "login": "example" }
+  },
+  "issue": {
+    "id": 2001,
+    "number": 42,
+    "title": "Widget fails without configuration",
+    "body": "The widget exits immediately.",
+    "state": "open",
+    "user": { "id": 3001, "login": "reporter", "type": "User" },
+    "author_association": "NONE",
+    "labels": []
+  },
+  "sender": { "id": 3001, "login": "reporter", "type": "User" }
+}

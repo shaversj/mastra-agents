@@ -1,0 +1,120 @@
+name: 'Mastra Triage Agent'
+description: 'AI-powered issue triage with a label-driven state machine'
+author: 'shaversj'
+
+inputs:
+  read-token:
+    description: 'GitHub token for trusted reads'
+    required: true
+  write-token:
+    description: 'GitHub token for exact trusted mutations'
+    required: true
+  anthropic-api-key:
+    description: 'Anthropic API key; one supported provider configuration is required'
+    required: false
+  cloudflare-api-key:
+    description: 'Cloudflare Workers AI API token; requires cloudflare-account-id'
+    required: false
+  cloudflare-account-id:
+    description: 'Cloudflare account ID; requires cloudflare-api-key'
+    required: false
+  openai-api-key:
+    description: 'OpenAI API key; one supported provider configuration is required'
+    required: false
+  triage-skill:
+    description: 'Path to the project-owned triage skill directory'
+    required: false
+  pr-skill:
+    description: 'Optional path to the project-owned PR-writing skill directory'
+    required: false
+  pr-skill-name:
+    description: 'Skill name from the optional PR skill frontmatter'
+    default: 'pr-writer'
+  auto-pr-on-fix:
+    description: 'Open a PR immediately after a verified fix instead of awaiting confirmation'
+    default: 'false'
+  build-command:
+    description: 'Optional offline setup command executed before triage'
+    required: false
+  prepared-dependency-paths:
+    description: 'Comma-separated symlink-free repository paths copied read-only into the sandbox'
+    default: ''
+  bot-logins:
+    description: 'Additional comma-separated bot logins to ignore'
+    default: ''
+  triage-model:
+    description: 'Model for reproduce, diagnose, verify, and fix work'
+    default: 'anthropic/claude-opus-4-6'
+  verification-model:
+    description: 'Model for retriage and confirmation classification'
+    default: 'anthropic/claude-sonnet-4-6'
+  label-needs-triage:
+    description: 'Label for issues waiting for triage'
+    default: 'triage: needs triage'
+  label-not-actionable:
+    description: 'Label for issues that are not actionable bugs'
+    default: 'triage: not actionable'
+  label-needs-reproduction:
+    description: 'Label for issues missing a reproduction'
+    default: 'triage: needs reproduction'
+  label-skipped:
+    description: 'Label for issues that cannot be triaged in CI'
+    default: 'triage: skipped'
+  label-unable-to-reproduce:
+    description: 'Label for issues the agent could not reproduce'
+    default: 'triage: unable to reproduce'
+  label-unable-to-fix:
+    description: 'Label for reproduced issues where no fix was found'
+    default: 'triage: unable to fix'
+  label-failed:
+    description: 'Label for unexpected triage failures'
+    default: 'triage: failed'
+  label-fix-pending:
+    description: 'Label for a proposed fix awaiting confirmation'
+    default: 'triage: fix pending'
+  label-fix-rejected:
+    description: 'Label for a proposed fix rejected by an eligible actor'
+    default: 'triage: fix rejected'
+  label-fix-verified:
+    description: 'Label for a fix with a matching pull request'
+    default: 'triage: fix verified'
+  pr-label-fix-verified:
+    description: 'Label applied to pull requests created from verified fixes'
+    default: 'fix verified'
+  preview-command:
+    description: 'Optional offline, secret-free changed-code inspection command returning strict JSON'
+    required: false
+  preview-allowed-hosts:
+    description: 'Comma-separated HTTPS host allowlist for the launcher and preview results'
+    default: ''
+  preview-launch-url:
+    description: 'Optional HTTPS endpoint for the metadata-only preview launcher'
+    required: false
+  preview-token:
+    description: 'Preview-scoped credential sent only to the metadata-only launcher'
+    required: false
+  activation-policy:
+    description: 'automatic-public or trusted'
+    default: 'automatic-public'
+  max-model-events:
+    description: 'Maximum model-invoking events in one attempt generation'
+    default: '4'
+  allowed-priority-labels:
+    description: 'Comma-separated priority labels the Action may apply'
+    default: ''
+  allowed-package-labels:
+    description: 'Comma-separated package labels the Action may apply'
+    default: ''
+  publication-token-kind:
+    description: 'github-token or workflow-triggering'
+    default: 'github-token'
+  allow-downstream-workflows:
+    description: 'Explicitly permit a workflow-triggering publication credential'
+    default: 'false'
+  safe-downstream-ci:
+    description: 'Declare reviewed secret-free, read-only, GitHub-hosted CI on triage branches'
+    default: 'false'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.mjs'

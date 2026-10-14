@@ -14,13 +14,13 @@ Create `apps/<agent-name>/` with:
 - `src/mastra/agents/<agent>.ts` with the app's agent definition
 - `scripts/preflight.ts` and `scripts/smoke-generated-server.ts`
 - focused configuration and registration tests under `tests/`
-- a multi-stage `Dockerfile` that builds from the workspace root and copies only this app's `.mastra/output` into a non-root runtime image
+- one primary deployable artifact and its black-box smoke test. Server apps use a multi-stage `Dockerfile`; action-native apps own the committed bundle or other artifact their host executes.
 
 Do not import source from another `apps/*` directory. Keep a dependency local to this manifest unless two or more apps share a stable runtime contract; only then extract a `packages/*` workspace with public exports and declare it explicitly in each consumer.
 
 ## 2. Preserve the script contract
 
-The package must expose `dev`, `format:check`, `lint`, `typecheck`, `test`, `build`, `start`, `config:check`, `preflight`, `preflight:built`, `test:server`, `image:build`, `image:smoke`, `check`, and `check:configured`. Stateful apps should add an explicit real-database test tier rather than making the default check depend on Docker.
+Every package must expose `check` and `artifact:smoke`. Server apps also preserve the existing `dev`, `format:check`, `lint`, `typecheck`, `test`, `build`, `start`, `config:check`, `preflight`, `preflight:built`, `test:server`, `image:build`, `image:smoke`, and `check:configured` scripts, with `artifact:smoke` delegating to `image:smoke`. Action-native apps replace only the server-specific lifecycle with scripts for their actual host artifact. Stateful apps should add an explicit real-database test tier rather than making the default check depend on Docker.
 
 Update the image tag and the `--app` argument in the image scripts. The directory name, `appId`, smoke argument, and CI matrix app value must agree. The package name and registered `agentId` must also be unique.
 
@@ -32,10 +32,10 @@ With Node 22.13.0, pnpm 10.32.1, and Docker available, run:
 pnpm install --frozen-lockfile
 pnpm check:repo
 pnpm --filter @mastra-agents/<agent-name> --fail-if-no-match run check
-pnpm --filter @mastra-agents/<agent-name> --fail-if-no-match run image:smoke
+pnpm --filter @mastra-agents/<agent-name> --fail-if-no-match run artifact:smoke
 ```
 
-The focused check must validate configuration and registration, build `.mastra/output`, pass Mastra preflight, probe `/health` and `/api/agents`, and stop cleanly after `SIGTERM`. The image smoke must do the same without a repository mount, while running non-root and publishing only to host loopback. Neither check may make a model request or require a live provider credential.
+The focused check must validate the app's configuration, registration, types, tests, build, and static preflight. The artifact smoke must execute the production entrypoint from a clean consumer-shaped fixture without making a model request or requiring a live provider credential. For server apps it still probes `/health` and `/api/agents`, verifies graceful `SIGTERM`, runs without a repository mount, and uses a non-root container published only to host loopback.
 
 Also run `pnpm check` before merging to prove aggregate workspace discovery.
 
@@ -43,4 +43,4 @@ Also run `pnpm check` before merging to prove aggregate workspace discovery.
 
 No central app registry should need editing: `scripts/affected-apps.mts` discovers app workspaces from their manifests. Confirm its fixture tests still pass and that the new app appears in the matrix for an app-local change. If the app consumes a shared workspace package, add a fixture proving that source and pnpm lockfile-importer changes select it transitively.
 
-Update `README.md` or `docs/architecture.md` only when the operating contract changes. Record validation evidence in the pull request. Images are built and smoked but are not published or deployed by this repository. Reference apps do not implement application authentication, so do not expose them publicly without authenticated ingress. A stateful app must additionally define migration ordering, readiness semantics, durable retry ownership, process shutdown behavior, and retention before it is considered deployable. Keep those decisions local until a second app proves a stable shared contract.
+Update `README.md` or `docs/architecture.md` only when the operating contract changes. Record validation evidence in the pull request. Artifacts are built and smoked but are not published or deployed by this repository. Reference server apps do not implement application authentication, so do not expose them publicly without authenticated ingress. A stateful app must additionally define migration ordering, readiness semantics, durable retry ownership, process shutdown behavior, and retention before it is considered deployable. Keep those decisions local until a second app proves a stable shared contract.

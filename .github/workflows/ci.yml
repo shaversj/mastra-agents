@@ -92,12 +92,35 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify triage sandbox runtime
+        if: matrix.app == 'triage-agent'
+        run: docker version
+
       - name: Validate selected application
+        if: matrix.app != 'triage-agent'
         env:
           PACKAGE_NAME: ${{ matrix.packageName }}
         run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run check
 
-      - name: Smoke selected application image
+      - name: Validate triage application
+        if: matrix.app == 'triage-agent'
         env:
           PACKAGE_NAME: ${{ matrix.packageName }}
-        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run image:smoke
+        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run check:base
+
+      - name: Verify triage Docker security boundary
+        if: matrix.app == 'triage-agent'
+        env:
+          PACKAGE_NAME: ${{ matrix.packageName }}
+        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run test:docker
+
+      - name: Install Node.js for triage Action smoke
+        if: matrix.app == 'triage-agent'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - name: Smoke selected application artifact
+        env:
+          PACKAGE_NAME: ${{ matrix.packageName }}
+        run: pnpm --filter "$PACKAGE_NAME" --fail-if-no-match run artifact:smoke

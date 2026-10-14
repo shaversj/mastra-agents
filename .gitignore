@@ -7,6 +7,8 @@ node_modules/
 
 .mastra/
 dist/
+!apps/triage-agent/dist/
+!apps/triage-agent/dist/**
 coverage/
 
 *.log

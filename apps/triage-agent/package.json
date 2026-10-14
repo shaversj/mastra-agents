@@ -1,0 +1,45 @@
+{
+  "name": "@mastra-agents/triage-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": "22.13.0",
+    "pnpm": "10.32.1"
+  },
+  "scripts": {
+    "dev": "mastra dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm test:non-docker && pnpm test:docker",
+    "test:non-docker": "vitest run --exclude tests/sandbox-docker.test.ts",
+    "test:docker": "vitest run tests/sandbox-docker.test.ts --maxWorkers=1",
+    "eval:fixtures": "vitest run tests/scorer.test.ts tests/evals.test.ts tests/registration.test.ts",
+    "eval:live": "tsx scripts/run-live-evals.ts",
+    "build": "tsx scripts/build-action.ts",
+    "check:dist": "node --check dist/index.mjs && git diff --exit-code -- dist",
+    "config:check": "INPUT_READ_TOKEN=fixture-read-token INPUT_WRITE_TOKEN=fixture-write-token INPUT_ANTHROPIC_API_KEY=fixture-provider-key INPUT_TRIAGE_SKILL=.agents/skills/triage tsx scripts/preflight.ts",
+    "artifact:smoke": "tsx scripts/smoke-action.ts",
+    "check:base": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm config:check && pnpm test:non-docker && pnpm build && pnpm check:dist",
+    "check": "pnpm check:base && pnpm test:docker"
+  },
+  "dependencies": {
+    "@mastra/core": "1.74.0",
+    "@mastra/docker": "0.10.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
+    "eslint": "10.0.1",
+    "mastra": "1.32.1",
+    "prettier": "3.9.9",
+    "tsx": "4.20.6",
+    "typescript": "6.0.3",
+    "vitest": "5.0.3",
+    "yaml": "2.9.1"
+  }
+}
