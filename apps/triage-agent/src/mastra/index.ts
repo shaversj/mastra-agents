@@ -17,6 +17,7 @@ import {
   type ModelInvoker,
   type TriageWorkflowOptions,
 } from './workflows/triage.js';
+import { triageReleaseGate, triageReleaseGateId } from './scorers/triage-release-gate.js';
 
 export { redactedTracingOptions } from './workflows/triage.js';
 export const invokeRedactedTriageAgent = invokeRegisteredTriageAgent;
@@ -25,6 +26,7 @@ interface TriageMastraConfiguration {
   agents: Record<string, unknown>;
   logger: false;
   loggerOptions: { correlation: false; export: false };
+  scorers: Record<string, unknown>;
   workflows: Record<string, unknown>;
 }
 
@@ -84,6 +86,7 @@ export function createTriageMastra<TAgent, TMastra = Mastra>(
     agents: { [appMetadata.agentId]: agent as never },
     logger: false,
     loggerOptions: { correlation: false, export: false },
+    scorers: { [triageReleaseGateId]: triageReleaseGate },
     workflows: {
       [appMetadata.workflowIds.comment]: commentWorkflow,
       [appMetadata.workflowIds.triage]: triageWorkflow,

@@ -1,0 +1,248 @@
+[
+  {
+    "name": "automatic public issue publishes a bounded proposal with the default token",
+    "input": {
+      "event": {
+        "action": "opened",
+        "actorAssociation": "NONE",
+        "actorLogin": "reporter",
+        "eventFingerprint": "event-open",
+        "issueAuthorLogin": "reporter",
+        "trustedActivation": false,
+        "trustedReset": false
+      },
+      "policy": {
+        "activationPolicy": "automatic-public",
+        "allowDownstreamWorkflows": false,
+        "publicationTokenKind": "github-token",
+        "safeDownstreamCi": false
+      },
+      "prior": { "generation": 0, "state": "needs_triage" },
+      "repository": {
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "defaultBranch": "main",
+        "fullName": "owner/repo",
+        "issueNumber": 42,
+        "observedProposalHeadSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "visibility": "public"
+      }
+    },
+    "output": {
+      "actor": { "association": "NONE", "login": "reporter" },
+      "defaultBranchWritten": false,
+      "eventFingerprint": "event-open",
+      "evidence": [
+        { "kind": "diff", "source": "trusted-sandbox", "status": "observed" },
+        { "kind": "test", "source": "trusted-sandbox", "status": "passed" }
+      ],
+      "generation": 1,
+      "merged": false,
+      "modelInvoked": true,
+      "mutations": [
+        {
+          "idempotencyKey": "branch:event-open",
+          "kind": "branch_push",
+          "ref": "triagebot/fix-42",
+          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        { "idempotencyKey": "comment:event-open", "kind": "comment" }
+      ],
+      "proposal": {
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch": "triagebot/fix-42",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "publicationTriggersDownstreamWorkflows": false,
+      "route": "triage",
+      "state": "fix_pending"
+    },
+    "expectedFailures": []
+  },
+  {
+    "name": "private repository is stopped without model or mutation",
+    "input": {
+      "event": {
+        "action": "opened",
+        "actorAssociation": "NONE",
+        "actorLogin": "reporter",
+        "eventFingerprint": "event-private",
+        "issueAuthorLogin": "reporter",
+        "trustedActivation": false,
+        "trustedReset": false
+      },
+      "policy": {
+        "activationPolicy": "automatic-public",
+        "allowDownstreamWorkflows": false,
+        "publicationTokenKind": "github-token",
+        "safeDownstreamCi": false
+      },
+      "prior": { "generation": 0, "state": "needs_triage" },
+      "repository": {
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "defaultBranch": "main",
+        "fullName": "owner/repo",
+        "issueNumber": 42,
+        "visibility": "private"
+      }
+    },
+    "output": {
+      "actor": { "association": "NONE", "login": "reporter" },
+      "defaultBranchWritten": false,
+      "eventFingerprint": "event-private",
+      "evidence": [],
+      "generation": 1,
+      "merged": false,
+      "modelInvoked": false,
+      "mutations": [],
+      "publicationTriggersDownstreamWorkflows": false,
+      "route": "noop",
+      "state": "needs_triage"
+    },
+    "expectedFailures": []
+  },
+  {
+    "name": "hardened activation waits for a maintainer",
+    "input": {
+      "event": {
+        "action": "opened",
+        "actorAssociation": "NONE",
+        "actorLogin": "reporter",
+        "eventFingerprint": "event-hardened",
+        "issueAuthorLogin": "reporter",
+        "trustedActivation": false,
+        "trustedReset": false
+      },
+      "policy": {
+        "activationPolicy": "trusted",
+        "allowDownstreamWorkflows": false,
+        "publicationTokenKind": "github-token",
+        "safeDownstreamCi": false
+      },
+      "prior": { "generation": 0, "state": "needs_triage" },
+      "repository": {
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "defaultBranch": "main",
+        "fullName": "owner/repo",
+        "issueNumber": 42,
+        "visibility": "public"
+      }
+    },
+    "output": {
+      "actor": { "association": "NONE", "login": "reporter" },
+      "defaultBranchWritten": false,
+      "eventFingerprint": "event-hardened",
+      "evidence": [],
+      "generation": 1,
+      "merged": false,
+      "modelInvoked": false,
+      "mutations": [],
+      "publicationTriggersDownstreamWorkflows": false,
+      "route": "noop",
+      "state": "needs_triage"
+    },
+    "expectedFailures": []
+  },
+  {
+    "name": "trusted reset opens a fresh generation",
+    "input": {
+      "event": {
+        "action": "comment",
+        "actorAssociation": "MEMBER",
+        "actorLogin": "maintainer",
+        "eventFingerprint": "event-reset",
+        "issueAuthorLogin": "reporter",
+        "trustedActivation": false,
+        "trustedReset": true
+      },
+      "policy": {
+        "activationPolicy": "trusted",
+        "allowDownstreamWorkflows": false,
+        "publicationTokenKind": "github-token",
+        "safeDownstreamCi": false
+      },
+      "prior": { "generation": 2, "state": "needs_triage" },
+      "repository": {
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "defaultBranch": "main",
+        "fullName": "owner/repo",
+        "issueNumber": 42,
+        "visibility": "public"
+      }
+    },
+    "output": {
+      "actor": { "association": "MEMBER", "login": "maintainer" },
+      "defaultBranchWritten": false,
+      "eventFingerprint": "event-reset",
+      "evidence": [{ "kind": "model_stage", "source": "model", "status": "observed" }],
+      "generation": 3,
+      "merged": false,
+      "modelInvoked": true,
+      "mutations": [
+        { "idempotencyKey": "labels:event-reset", "kind": "labels" },
+        { "idempotencyKey": "comment:event-reset", "kind": "comment" }
+      ],
+      "publicationTriggersDownstreamWorkflows": false,
+      "route": "triage",
+      "state": "not_actionable"
+    },
+    "expectedFailures": []
+  },
+  {
+    "name": "elevated publication is explicit and branch CI is declared safe",
+    "input": {
+      "event": {
+        "action": "opened",
+        "actorAssociation": "OWNER",
+        "actorLogin": "maintainer",
+        "eventFingerprint": "event-elevated",
+        "issueAuthorLogin": "reporter",
+        "trustedActivation": true,
+        "trustedReset": false
+      },
+      "policy": {
+        "activationPolicy": "trusted",
+        "allowDownstreamWorkflows": true,
+        "publicationTokenKind": "workflow-triggering",
+        "safeDownstreamCi": true
+      },
+      "prior": { "generation": 0, "state": "needs_triage" },
+      "repository": {
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "defaultBranch": "main",
+        "fullName": "owner/repo",
+        "issueNumber": 42,
+        "observedProposalHeadSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "visibility": "public"
+      }
+    },
+    "output": {
+      "actor": { "association": "OWNER", "login": "maintainer" },
+      "defaultBranchWritten": false,
+      "eventFingerprint": "event-elevated",
+      "evidence": [
+        { "kind": "diff", "source": "trusted-sandbox", "status": "observed" },
+        { "kind": "test", "source": "trusted-sandbox", "status": "passed" }
+      ],
+      "generation": 1,
+      "merged": false,
+      "modelInvoked": true,
+      "mutations": [
+        {
+          "idempotencyKey": "branch:event-elevated",
+          "kind": "branch_push",
+          "ref": "triagebot/fix-42",
+          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ],
+      "proposal": {
+        "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch": "triagebot/fix-42",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "publicationTriggersDownstreamWorkflows": true,
+      "route": "triage",
+      "state": "fix_pending"
+    },
+    "expectedFailures": []
+  }
+]

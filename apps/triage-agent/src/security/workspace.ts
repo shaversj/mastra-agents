@@ -144,6 +144,29 @@ async function assertRegularTree(path: string): Promise<void> {
   for (const entry of await readdir(path)) await assertRegularTree(join(path, entry));
 }
 
+async function assertPreparedTreeCredentialFree(path: string): Promise<void> {
+  const metadata = await lstat(path);
+  if (metadata.isDirectory()) {
+    const { readdir } = await import('node:fs/promises');
+    for (const entry of await readdir(path)) {
+      await assertPreparedTreeCredentialFree(join(path, entry));
+    }
+    return;
+  }
+  const name = basename(path).toLowerCase();
+  if (
+    name === '.env' ||
+    name.startsWith('.env.') ||
+    ['.gitconfig', '.netrc', '.npmrc', '.pypirc', '.yarnrc', '.yarnrc.yml'].includes(name)
+  ) {
+    throw new Error('WORKSPACE_PREPARED_CREDENTIAL_FILE');
+  }
+  if (metadata.size > defaultDiffLimits.maxFileBytes) {
+    throw new Error('WORKSPACE_PREPARED_FILE_TOO_LARGE');
+  }
+  assertCredentialFreeContent(await readFile(path), 'WORKSPACE_PREPARED_CREDENTIAL_CONTENT');
+}
+
 function boundedCommand(command: string, args: string[], limits: CommandLimits): string {
   const invocation = args.length
     ? `${shellQuote(command)} ${args.map((argument) => shellQuote(argument)).join(' ')}`
@@ -442,6 +465,7 @@ async function prepareReadOnlyPath(
 ): Promise<string> {
   assertContainedRelativePath(prepared.target, 'WORKSPACE_PREPARED_TARGET_INVALID');
   await assertRegularTree(prepared.source);
+  await assertPreparedTreeCredentialFree(prepared.source);
   const canonicalSource = await realpath(prepared.source);
   const preparedRoot = join(materializationRoot, 'prepared');
   const destination = join(preparedRoot, prepared.target);

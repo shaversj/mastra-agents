@@ -8,6 +8,7 @@ import { parseActionInputs } from '../src/action/inputs.js';
 import { runAction } from '../src/action/index.js';
 import {
   createLiveActionDependencies,
+  resolvePreparedDependencyPath,
   resolveProjectSkillFile,
   runRegisteredWorkflow,
 } from '../src/action/live-runtime.js';
@@ -129,6 +130,28 @@ describe('Action controller', () => {
       ).resolves.toBeUndefined();
       await expect(resolveProjectSkillFile(root, outside)).resolves.toBeUndefined();
       await expect(resolveProjectSkillFile(root, '.agents/skills/linked')).resolves.toBeUndefined();
+    } finally {
+      await Promise.all([
+        rm(root, { force: true, recursive: true }),
+        rm(outside, { force: true, recursive: true }),
+      ]);
+    }
+  });
+
+  it('accepts only contained, symlink-free prepared dependency paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'triage-prepared-path-'));
+    const outside = await mkdtemp(join(tmpdir(), 'triage-prepared-outside-'));
+    try {
+      const prepared = join(root, '.triage', 'dependencies');
+      await mkdir(prepared, { recursive: true });
+      await writeFile(join(prepared, 'runtime.js'), 'export {};\n');
+      await symlink(outside, join(root, '.triage', 'linked'));
+
+      await expect(resolvePreparedDependencyPath(root, '.triage/dependencies')).resolves.toBe(
+        await realpath(prepared),
+      );
+      await expect(resolvePreparedDependencyPath(root, '.triage/linked')).resolves.toBeUndefined();
+      await expect(resolvePreparedDependencyPath(root, '../outside')).resolves.toBeUndefined();
     } finally {
       await Promise.all([
         rm(root, { force: true, recursive: true }),

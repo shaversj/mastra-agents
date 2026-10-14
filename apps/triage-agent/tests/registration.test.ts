@@ -26,5 +26,6 @@ describe('Mastra registration', () => {
     expect(Object.keys(mastra.listWorkflows()).sort()).toEqual(
       [appMetadata.workflowIds.comment, appMetadata.workflowIds.triage].sort(),
     );
+    expect(Object.keys(mastra.listScorers() ?? {})).toEqual([appMetadata.scorerId]);
   });
 });

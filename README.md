@@ -2,7 +2,7 @@
 
 A pnpm workspace for Mastra agents that build, validate, and deploy independently. Each directory under `apps/` is one deployment unit with its own manifest, runtime configuration, tests, and primary deployable artifact.
 
-The reference apps are `@mastra-agents/researcher-agent` and `@mastra-agents/writer-agent`. `@mastra-agents/incident-triage-agent` is the stateful pattern, with independently deployable API and worker roles in one image.
+The reference apps are `@mastra-agents/researcher-agent` and `@mastra-agents/writer-agent`. `@mastra-agents/incident-triage-agent` is the stateful pattern, with independently deployable API and worker roles in one image. `@mastra-agents/triage-agent` is an independently releasable GitHub Action for Mastra-powered issue triage and fix proposals.
 
 ## Prerequisites
 
@@ -26,6 +26,7 @@ Run only one app's checks with a fail-safe workspace filter:
 pnpm --filter @mastra-agents/researcher-agent --fail-if-no-match run check
 pnpm --filter @mastra-agents/writer-agent --fail-if-no-match run check
 pnpm --filter @mastra-agents/incident-triage-agent --fail-if-no-match run check
+pnpm --filter @mastra-agents/triage-agent --fail-if-no-match run check
 ```
 
 Default checks are model-free: they validate configuration, registration, operational endpoints, authorization boundaries, and graceful shutdown without sending a model request or requiring a provider credential. The incident app has separate real-Postgres, image, and opt-in live-certification tiers documented in its app README.
@@ -58,3 +59,4 @@ The repository builds and smokes local production artifacts only. It does not pu
 - [Architecture](docs/architecture.md) explains deployment boundaries, ownership, generated artifacts, and affected-app CI.
 - [Adding an agent](docs/adding-agent.md) is the checklist for creating another independent app.
 - [Incident triage agent](apps/incident-triage-agent/README.md) documents its stateful operating and safety contract.
+- [GitHub triage agent](apps/triage-agent/README.md) documents immutable Action installation, repository preparation, and release safety.

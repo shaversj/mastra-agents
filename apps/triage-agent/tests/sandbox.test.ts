@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -314,6 +314,21 @@ describe('materialized workspace lifecycle', () => {
         triageSkillPath: join(fixtureRoot, 'triage-skill', 'SKILL.md'),
       }),
     ).rejects.toThrow('WORKSPACE_SOURCE_CREDENTIAL');
+  });
+
+  it('rejects credentials in a prepared dependency tree', async () => {
+    const prepared = await mkdtemp(join(tmpdir(), 'triage-secret-prepared-'));
+    cleanups.push(() => rm(prepared, { force: true, recursive: true }));
+    await writeFile(join(prepared, '.npmrc'), '//registry.example.com/:_authToken=secret\n');
+
+    await expect(
+      createMaterializedWorkspace({
+        preparedPaths: [{ source: prepared, target: 'prepared' }],
+        sourceFiles: ['package.json'],
+        sourceRoot: fixtureRoot,
+        triageSkillPath: join(fixtureRoot, 'triage-skill', 'SKILL.md'),
+      }),
+    ).rejects.toThrow('WORKSPACE_PREPARED_CREDENTIAL_FILE');
   });
 
   it('enforces aggregate materialization ceilings before setup execution', async () => {

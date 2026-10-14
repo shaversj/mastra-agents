@@ -350,6 +350,40 @@ export async function resolveProjectSkillFile(
     : undefined;
 }
 
+export async function resolvePreparedDependencyPath(
+  repositoryRoot: string,
+  configuredPath: string,
+): Promise<string | undefined> {
+  if (
+    !configuredPath ||
+    isAbsolute(configuredPath) ||
+    configuredPath.includes('\\') ||
+    /^[A-Za-z]:/u.test(configuredPath)
+  ) {
+    return undefined;
+  }
+  const segments = configuredPath.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    return undefined;
+  }
+
+  const canonicalRoot = await realpath(repositoryRoot).catch(() => undefined);
+  if (!canonicalRoot) return undefined;
+  let candidate = canonicalRoot;
+  for (const segment of segments) {
+    candidate = resolve(candidate, segment);
+    if (!isContained(canonicalRoot, candidate)) return undefined;
+    const metadata = await lstat(candidate).catch(() => undefined);
+    if (!metadata || metadata.isSymbolicLink()) return undefined;
+  }
+  const finalMetadata = await lstat(candidate).catch(() => undefined);
+  if (!finalMetadata?.isDirectory()) return undefined;
+  const canonicalCandidate = await realpath(candidate).catch(() => undefined);
+  return canonicalCandidate && isContained(canonicalRoot, canonicalCandidate)
+    ? canonicalCandidate
+    : undefined;
+}
+
 interface StoredState {
   actionLogin: string;
   proposal?: ProposalIdentity;
@@ -724,11 +758,19 @@ export function createLiveActionDependencies(input: {
       let materialized: MaterializedWorkspace | undefined;
       try {
         assertSafeGitEnvironment(process.env);
+        const preparedPaths = await Promise.all(
+          inputs.preparedDependencyPaths.map(async (path) => {
+            const source = await resolvePreparedDependencyPath(repositoryRoot, path);
+            if (!source) throw new Error('MODEL_ROUTE_PREPARED_DEPENDENCY_INVALID');
+            return { source, target: path };
+          }),
+        );
         materialized = await createMaterializedWorkspace({
           ...(inputs.buildCommand ? { buildCommand: inputs.buildCommand } : {}),
           sourceFiles: await sourceFiles(repositoryRoot),
           sourceRoot: repositoryRoot,
           environment: process.env,
+          preparedPaths,
           triageSkillPath,
         });
         const activeWorkspace = materialized;
@@ -895,18 +937,34 @@ export function createLiveActionDependencies(input: {
     inspectModelCapabilities: async ({ inputs, route }) => {
       const repositoryRoot = input.environment.GITHUB_WORKSPACE;
       const prSkillRequired = route.kind === 'classify_fix_response' || inputs.autoPrOnFix;
-      const [triageSkillPath, prSkillPath, repositoryLabels, checkoutSafe] = await Promise.all([
+      const [
+        triageSkillPath,
+        prSkillPath,
+        preparedDependencyPaths,
+        repositoryLabels,
+        checkoutSafe,
+      ] = await Promise.all([
         repositoryRoot && inputs.triageSkill
           ? resolveProjectSkillFile(repositoryRoot, inputs.triageSkill)
           : Promise.resolve(null),
         repositoryRoot && inputs.prSkill
           ? resolveProjectSkillFile(repositoryRoot, inputs.prSkill)
           : Promise.resolve(null),
+        repositoryRoot
+          ? Promise.all(
+              inputs.preparedDependencyPaths.map((path) =>
+                resolvePreparedDependencyPath(repositoryRoot, path),
+              ),
+            )
+          : Promise.resolve([]),
         readApi.listRepositoryLabels(),
         repositoryRoot
           ? checkoutCredentialHygieneSafe(repositoryRoot, input.environment.GITHUB_SHA)
           : Promise.resolve(false),
       ]);
+      if (preparedDependencyPaths.some((path) => !path)) {
+        throw new Error('MODEL_ROUTE_PREPARED_DEPENDENCY_INVALID');
+      }
       const availableLabels = new Set(repositoryLabels);
       const requiredLabels = new Set([
         ...Object.values(inputs.labels),

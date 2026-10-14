@@ -36,6 +36,9 @@ inputs:
   build-command:
     description: 'Optional offline setup command executed before triage'
     required: false
+  prepared-dependency-paths:
+    description: 'Comma-separated symlink-free repository paths copied read-only into the sandbox'
+    default: ''
   bot-logins:
     description: 'Additional comma-separated bot logins to ignore'
     default: ''

@@ -44,6 +44,7 @@ describe('triage Action configuration', () => {
         unable_to_reproduce: 'triage: unable to reproduce',
       },
       maxModelEvents: 4,
+      preparedDependencyPaths: [],
       previewAllowedHosts: [],
       prFixVerifiedLabel: 'fix verified',
       publicationTokenKind: 'github-token',
@@ -60,6 +61,15 @@ describe('triage Action configuration', () => {
         INPUT_AUTO_PR_ON_FIX: 'true',
       }),
     ).toMatchObject({ autoPrOnFix: true });
+  });
+
+  it('parses explicit prepared dependency paths without treating them as secrets', () => {
+    expect(
+      parseActionInputs({
+        ...validEnvironment,
+        INPUT_PREPARED_DEPENDENCY_PATHS: '.triage/dependencies,vendor/runtime',
+      }).preparedDependencyPaths,
+    ).toEqual(['.triage/dependencies', 'vendor/runtime']);
   });
 
   it('rejects duplicate labels, invalid limits, and invalid preview hosts', () => {

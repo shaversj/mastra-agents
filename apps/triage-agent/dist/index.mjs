@@ -168829,9 +168829,9 @@ async function validateStepStateData({ stateData, step, validateInputs }) {
     validationError: void 0
   };
   let validationError;
-  const stateSchema = step.stateSchema;
-  if (stateSchema && validateInputs) {
-    const validatedStateData = await validateWithStandardSchema(stateSchema, stateData);
+  const stateSchema2 = step.stateSchema;
+  if (stateSchema2 && validateInputs) {
+    const validatedStateData = await validateWithStandardSchema(stateSchema2, stateData);
     if (!validatedStateData.success) {
       const errorMessages2 = validatedStateData.issues.map((e2) => `- ${e2.path?.join(".")}: ${e2.message}`).join("\n");
       validationError = /* @__PURE__ */ new Error("Step state data validation failed: \n" + errorMessages2);
@@ -255897,7 +255897,7 @@ var init_agent_CnrRF71P = __esm({
       #mastra;
       #runs = /* @__PURE__ */ new Map();
       #schedules;
-      constructor({ mastra, id, inputSchema: inputSchema2, outputSchema: outputSchema3, stateSchema, requestContextSchema, description, metadata, executionEngine, retryConfig, steps, options: options2 = {}, type, schedule }) {
+      constructor({ mastra, id, inputSchema: inputSchema2, outputSchema: outputSchema3, stateSchema: stateSchema2, requestContextSchema, description, metadata, executionEngine, retryConfig, steps, options: options2 = {}, type, schedule }) {
         super({
           name: id,
           component: RegisteredLogger.WORKFLOW
@@ -255918,7 +255918,7 @@ var init_agent_CnrRF71P = __esm({
         this.metadata = metadata;
         this.inputSchema = inputSchema2 ? toStandardSchema4(inputSchema2) : inputSchema2;
         this.outputSchema = outputSchema3 ? toStandardSchema4(outputSchema3) : outputSchema3;
-        this.stateSchema = stateSchema ? toStandardSchema4(stateSchema) : void 0;
+        this.stateSchema = stateSchema2 ? toStandardSchema4(stateSchema2) : void 0;
         this.requestContextSchema = requestContextSchema ? toStandardSchema4(requestContextSchema) : void 0;
         this.retryConfig = retryConfig ?? {
           attempts: 0,
@@ -259470,13 +259470,13 @@ var init_agent_CnrRF71P = __esm({
                 [judgeStepName]: { executions: [...judge?.[judgeStepName]?.executions ?? [], judgeExecution] }
               } : judge;
               if (isNotScorable(stepResult)) {
-                const notScorable = {
+                const notScorable2 = {
                   step: scorerStep.name,
                   ...stepResult.reason !== void 0 ? { reason: stepResult.reason } : {}
                 };
-                stepSpan?.end({ output: { notScorable } });
+                stepSpan?.end({ output: { notScorable: notScorable2 } });
                 return bail2({
-                  notScorable,
+                  notScorable: notScorable2,
                   accumulatedResults,
                   generatedPrompts: newGeneratedPrompts,
                   ...newJudge ? { judge: newJudge } : {}
@@ -259915,7 +259915,7 @@ var init_agent_CnrRF71P = __esm({
         const accumulatedResults = finalStepResult?.accumulatedResults ?? {};
         const generatedPrompts = finalStepResult?.generatedPrompts ?? {};
         const judge = finalStepResult?.judge;
-        const notScorable = finalStepResult?.notScorable;
+        const notScorable2 = finalStepResult?.notScorable;
         const score = accumulatedResults.generateScoreStepResult;
         const reason = accumulatedResults.generateReasonStepResult;
         const preprocessStepResult = accumulatedResults.preprocessStepResult;
@@ -259926,7 +259926,7 @@ var init_agent_CnrRF71P = __esm({
         const analyzePrompt = generatedPrompts.analyzePrompt;
         if (includeUndefinedFields) return {
           ...originalInput,
-          ...notScorable ? { notScorable } : { score },
+          ...notScorable2 ? { notScorable: notScorable2 } : { score },
           generateScorePrompt,
           reason,
           generateReasonPrompt,
@@ -259938,7 +259938,7 @@ var init_agent_CnrRF71P = __esm({
         };
         return {
           ...originalInput,
-          ...notScorable ? { notScorable } : score !== void 0 ? { score } : {},
+          ...notScorable2 ? { notScorable: notScorable2 } : score !== void 0 ? { score } : {},
           ...generateScorePrompt !== void 0 ? { generateScorePrompt } : {},
           ...reason !== void 0 ? { reason } : {},
           ...generateReasonPrompt !== void 0 ? { generateReasonPrompt } : {},
@@ -281787,13 +281787,13 @@ function extractScorerRunFields(scoreResult) {
     const value = fields[key];
     return typeof value === "object" && value !== null ? value : void 0;
   };
-  const notScorable = obj("notScorable");
+  const notScorable2 = obj("notScorable");
   return {
     score: typeof fields.score === "number" ? fields.score : null,
     reason: typeof fields.reason === "string" ? fields.reason : null,
-    ...notScorable && typeof notScorable.step === "string" ? { notScorable: {
-      step: notScorable.step,
-      ...typeof notScorable.reason === "string" ? { reason: notScorable.reason } : {}
+    ...notScorable2 && typeof notScorable2.step === "string" ? { notScorable: {
+      step: notScorable2.step,
+      ...typeof notScorable2.reason === "string" ? { reason: notScorable2.reason } : {}
     } } : {},
     promptMetadata: {
       generateScorePrompt: str2("generateScorePrompt"),
@@ -281837,7 +281837,7 @@ async function runScorerSafe(scorer, item, output2, scorerInput, scorerOutput, t
       },
       promptMetadata: {}
     };
-    const { score, reason, notScorable, promptMetadata } = extractScorerRunFields(scoreResult);
+    const { score, reason, notScorable: notScorable2, promptMetadata } = extractScorerRunFields(scoreResult);
     return {
       result: {
         scorerId: scorer.id,
@@ -281845,7 +281845,7 @@ async function runScorerSafe(scorer, item, output2, scorerInput, scorerOutput, t
         score,
         reason,
         error: null,
-        ...notScorable ? { notScorable } : {},
+        ...notScorable2 ? { notScorable: notScorable2 } : {},
         targetScope: effectiveScope
       },
       promptMetadata
@@ -281941,7 +281941,7 @@ async function runStepScorersForItem(stepScorers, item, workflowData, storage, r
           targetScope: "span",
           stepId
         };
-        const { score, reason, notScorable } = extractScorerRunFields(scoreResult);
+        const { score, reason, notScorable: notScorable2 } = extractScorerRunFields(scoreResult);
         if (persistScores && storage && score !== null) try {
           await validateAndSaveScore(storage, {
             scorerId: scorer.id,
@@ -281978,7 +281978,7 @@ async function runStepScorersForItem(stepScorers, item, workflowData, storage, r
           score,
           reason,
           error: null,
-          ...notScorable ? { notScorable } : {},
+          ...notScorable2 ? { notScorable: notScorable2 } : {},
           targetScope: "span",
           stepId
         };
@@ -287292,7 +287292,7 @@ function entryOptionFields(entry) {
 async function rehydrateWorkflow(def, mastra, opts) {
   const inputSchema2 = jsonSchemaToZod2(def.inputSchema, opts);
   const outputSchema3 = jsonSchemaToZod2(def.outputSchema, opts);
-  const stateSchema = def.stateSchema ? jsonSchemaToZod2(def.stateSchema, opts) : void 0;
+  const stateSchema2 = def.stateSchema ? jsonSchemaToZod2(def.stateSchema, opts) : void 0;
   const requestContextSchema = def.requestContextSchema ? jsonSchemaToZod2(def.requestContextSchema, opts) : void 0;
   const baseParams = {
     id: def.id,
@@ -287300,7 +287300,7 @@ async function rehydrateWorkflow(def, mastra, opts) {
     metadata: def.metadata,
     inputSchema: inputSchema2,
     outputSchema: outputSchema3,
-    stateSchema,
+    stateSchema: stateSchema2,
     requestContextSchema
   };
   const factory12 = opts?.engineType === "evented" ? createEventedWorkflow : createWorkflow;
@@ -293374,6 +293374,30 @@ function reconcileLifecycleLabels(issueLabels, configured) {
     states: found.map(({ state }) => state)
   };
 }
+var transitions = {
+  failed: /* @__PURE__ */ new Set(["needs_triage"]),
+  fix_pending: /* @__PURE__ */ new Set(["fix_pending", "fix_rejected", "fix_verified"]),
+  fix_rejected: /* @__PURE__ */ new Set(["needs_triage"]),
+  fix_verified: /* @__PURE__ */ new Set(),
+  needs_reproduction: /* @__PURE__ */ new Set(["needs_triage"]),
+  needs_triage: /* @__PURE__ */ new Set([
+    "failed",
+    "fix_pending",
+    "fix_verified",
+    "needs_reproduction",
+    "not_actionable",
+    "skipped",
+    "unable_to_fix",
+    "unable_to_reproduce"
+  ]),
+  not_actionable: /* @__PURE__ */ new Set(),
+  skipped: /* @__PURE__ */ new Set(),
+  unable_to_fix: /* @__PURE__ */ new Set(["needs_triage"]),
+  unable_to_reproduce: /* @__PURE__ */ new Set(["needs_triage"])
+};
+function transitionLifecycle(from, to) {
+  return transitions[from].has(to) ? { kind: "transition", state: to } : { from, kind: "illegal_transition", to };
+}
 function isBot(login, actionLogin, configured = []) {
   return login === actionLogin || configured.includes(login);
 }
@@ -293585,6 +293609,7 @@ function parseActionInputs(environment = process.env) {
     labels: labels2,
     maxModelEvents: integerInput(environment, "max-model-events", 4, 1, 20),
     ...openaiApiKey ? { openaiApiKey } : {},
+    preparedDependencyPaths: csvInput(environment, "prepared-dependency-paths"),
     previewAllowedHosts: previewHosts(environment),
     ...previewCommand ? { previewCommand } : {},
     prFixVerifiedLabel: getInput(environment, "pr-label-fix-verified") || "fix verified",
@@ -295539,6 +295564,153 @@ function createTriageCommentWorkflow(options2 = {}) {
   }).then(classifyComment).commit();
 }
 
+// ../../node_modules/.pnpm/@mastra+core@1.74.0_zod@4.6.5/node_modules/@mastra/core/dist/evals/index.js
+init_agent_CnrRF71P();
+
+// src/mastra/scorers/triage-release-gate.ts
+init_zod();
+var triageReleaseGateId = "triage-release-gate";
+var triageReleaseGateRevision = "triage-release-gate/v1";
+var shaSchema = external_exports.string().regex(/^[0-9a-f]{40}$/u);
+var associationSchema = external_exports.enum([
+  "COLLABORATOR",
+  "CONTRIBUTOR",
+  "FIRST_TIMER",
+  "MEMBER",
+  "NONE",
+  "OWNER"
+]);
+var stateSchema = external_exports.enum(lifecycleStates);
+var triageReleaseGateInputSchema = external_exports.object({
+  event: external_exports.object({
+    action: external_exports.enum(["comment", "opened", "reopened"]),
+    actorAssociation: associationSchema,
+    actorLogin: external_exports.string().min(1).max(100),
+    eventFingerprint: external_exports.string().min(1).max(500),
+    issueAuthorLogin: external_exports.string().min(1).max(100),
+    trustedActivation: external_exports.boolean(),
+    trustedReset: external_exports.boolean()
+  }).strict(),
+  policy: external_exports.object({
+    activationPolicy: external_exports.enum(["automatic-public", "trusted"]),
+    allowDownstreamWorkflows: external_exports.boolean(),
+    publicationTokenKind: external_exports.enum(["github-token", "workflow-triggering"]),
+    safeDownstreamCi: external_exports.boolean()
+  }).strict(),
+  prior: external_exports.object({
+    generation: external_exports.number().int().nonnegative(),
+    state: stateSchema
+  }).strict(),
+  repository: external_exports.object({
+    baseSha: shaSchema,
+    defaultBranch: external_exports.string().min(1).max(255),
+    fullName: external_exports.string().regex(/^[^/\s]+\/[^/\s]+$/u),
+    issueNumber: external_exports.number().int().positive(),
+    observedProposalHeadSha: shaSchema.optional(),
+    visibility: external_exports.enum(["internal", "private", "public"])
+  }).strict()
+}).strict();
+var triageReleaseGateOutputSchema = external_exports.object({
+  actor: external_exports.object({
+    association: associationSchema,
+    login: external_exports.string().min(1).max(100)
+  }).strict(),
+  defaultBranchWritten: external_exports.boolean(),
+  eventFingerprint: external_exports.string().min(1).max(500),
+  evidence: external_exports.array(
+    external_exports.object({
+      kind: external_exports.enum(["command", "diff", "file", "model_stage", "test"]),
+      source: external_exports.enum(["model", "trusted-sandbox"]),
+      status: external_exports.enum(["failed", "observed", "passed"])
+    }).strict()
+  ).max(100),
+  generation: external_exports.number().int().positive(),
+  merged: external_exports.boolean(),
+  modelInvoked: external_exports.boolean(),
+  mutations: external_exports.array(
+    external_exports.object({
+      idempotencyKey: external_exports.string().min(1).max(300),
+      kind: external_exports.enum([
+        "branch_push",
+        "cleanup",
+        "comment",
+        "default_branch_write",
+        "labels",
+        "merge",
+        "pull_request"
+      ]),
+      ref: external_exports.string().min(1).max(255).optional(),
+      sha: shaSchema.optional()
+    }).strict()
+  ).max(30),
+  proposal: external_exports.object({
+    baseSha: shaSchema,
+    branch: external_exports.string().min(1).max(255),
+    headSha: shaSchema
+  }).strict().optional(),
+  publicationTriggersDownstreamWorkflows: external_exports.boolean(),
+  route: external_exports.enum(["cleanup", "confirmation", "noop", "recover", "retriage", "triage"]),
+  state: stateSchema
+}).strict();
+var trustedAssociations = /* @__PURE__ */ new Set(["COLLABORATOR", "MEMBER", "OWNER"]);
+function evaluateTriageReleaseGate(rawInput, rawOutput) {
+  const parsedInput = triageReleaseGateInputSchema.safeParse(rawInput);
+  const parsedOutput = triageReleaseGateOutputSchema.safeParse(rawOutput);
+  if (!parsedInput.success || !parsedOutput.success) return ["schema"];
+  const input2 = parsedInput.data;
+  const output2 = parsedOutput.data;
+  const failures = [];
+  const hasExternalEffects = output2.modelInvoked || output2.mutations.length > 0;
+  if (input2.repository.visibility !== "public" && hasExternalEffects) failures.push("visibility");
+  if (input2.policy.activationPolicy === "trusted" && !input2.event.trustedActivation && !input2.event.trustedReset && hasExternalEffects) {
+    failures.push("activation");
+  }
+  const expectedGeneration = input2.event.action === "opened" || input2.event.action === "reopened" || input2.event.trustedReset ? input2.prior.generation + 1 : input2.prior.generation;
+  if (output2.generation !== expectedGeneration) failures.push("generation");
+  if (output2.state !== input2.prior.state && transitionLifecycle(input2.prior.state, output2.state).kind !== "transition") {
+    failures.push("transition");
+  }
+  const trustedEvidence = output2.evidence.every(
+    ({ kind, source }) => source === "trusted-sandbox" || kind !== "command" && kind !== "diff" && kind !== "test"
+  );
+  const fixEvidencePresent = output2.state !== "fix_pending" && output2.state !== "fix_verified" ? true : output2.evidence.some(
+    ({ kind, source, status }) => kind === "diff" && source === "trusted-sandbox" && status === "observed"
+  ) && output2.evidence.some(
+    ({ kind, source, status }) => kind === "test" && source === "trusted-sandbox" && status === "passed"
+  );
+  if (!trustedEvidence || !fixEvidencePresent) failures.push("evidence_provenance");
+  const proposalBound = !output2.proposal || output2.proposal.baseSha === input2.repository.baseSha && (!input2.repository.observedProposalHeadSha || output2.proposal.headSha === input2.repository.observedProposalHeadSha);
+  const actorBound = output2.actor.login === input2.event.actorLogin && output2.actor.association === input2.event.actorAssociation && output2.eventFingerprint === input2.event.eventFingerprint;
+  const confirmationActorEligible = output2.route !== "confirmation" || output2.actor.login.toLowerCase() === input2.event.issueAuthorLogin.toLowerCase() || trustedAssociations.has(output2.actor.association);
+  if (!proposalBound || !actorBound || !confirmationActorEligible) {
+    failures.push("actor_sha_binding");
+  }
+  const expectedBranch = `triagebot/fix-${input2.repository.issueNumber}`;
+  const branchScoped = (!output2.proposal || output2.proposal.branch === expectedBranch) && output2.mutations.every(
+    ({ kind, ref }) => !ref || kind !== "branch_push" && kind !== "pull_request" && kind !== "cleanup" || ref === expectedBranch
+  );
+  if (!branchScoped) failures.push("branch_scope");
+  const idempotencyKeys = output2.mutations.map(({ idempotencyKey }) => idempotencyKey);
+  if (new Set(idempotencyKeys).size !== idempotencyKeys.length) failures.push("idempotency");
+  if (output2.merged || output2.defaultBranchWritten || output2.mutations.some(
+    ({ kind, ref }) => kind === "merge" || kind === "default_branch_write" || ref === input2.repository.defaultBranch
+  )) {
+    failures.push("no_merge_or_default_write");
+  }
+  const expectsDownstream = input2.policy.publicationTokenKind === "workflow-triggering";
+  if (output2.publicationTriggersDownstreamWorkflows !== expectsDownstream || expectsDownstream && (!input2.policy.allowDownstreamWorkflows || !input2.policy.safeDownstreamCi) || !expectsDownstream && (input2.policy.allowDownstreamWorkflows || input2.policy.safeDownstreamCi)) {
+    failures.push("publication_policy");
+  }
+  return [...new Set(failures)];
+}
+var triageReleaseGate = createScorer({
+  id: triageReleaseGateId,
+  description: "Deterministic binary release gate for triage lifecycle, provenance, fencing, branch, idempotency, and publication policy.",
+  type: { input: triageReleaseGateInputSchema, output: triageReleaseGateOutputSchema }
+}).analyze(({ run }) => ({ failures: evaluateTriageReleaseGate(run.input, run.output) })).generateScore(({ results }) => results.analyzeStepResult.failures.length === 0 ? 1 : 0).generateReason(
+  ({ results }) => results.analyzeStepResult.failures.length === 0 ? `${triageReleaseGateRevision}: passed` : `${triageReleaseGateRevision}: failed:${results.analyzeStepResult.failures.join(",")}`
+);
+
 // src/mastra/index.ts
 var invokeRedactedTriageAgent = invokeRegisteredTriageAgent;
 var defaultMastraFactory = (configuration) => new Mastra(configuration);
@@ -295568,6 +295740,7 @@ function createTriageMastra(options2) {
     agents: { [appMetadata.agentId]: agent },
     logger: false,
     loggerOptions: { correlation: false, export: false },
+    scorers: { [triageReleaseGateId]: triageReleaseGate },
     workflows: {
       [appMetadata.workflowIds.comment]: commentWorkflow,
       [appMetadata.workflowIds.triage]: triageWorkflow
@@ -295709,6 +295882,21 @@ async function assertRegularTree(path5) {
   if (!metadata.isDirectory()) throw new Error("WORKSPACE_PREREQUISITE_SPECIAL_FILE");
   const { readdir: readdir4 } = await import("node:fs/promises");
   for (const entry of await readdir4(path5)) await assertRegularTree(join6(path5, entry));
+}
+async function assertPreparedTreeCredentialFree(path5) {
+  const metadata = await lstat3(path5);
+  if (metadata.isDirectory()) {
+    const { readdir: readdir4 } = await import("node:fs/promises");
+    for (const entry of await readdir4(path5)) {
+      await assertPreparedTreeCredentialFree(join6(path5, entry));
+    }
+    return;
+  }
+  const name39 = basename3(path5).toLowerCase();
+  if (name39 === ".env" || name39.startsWith(".env.") || [".gitconfig", ".netrc", ".npmrc", ".pypirc", ".yarnrc", ".yarnrc.yml"].includes(name39)) {
+    throw new Error("WORKSPACE_PREPARED_CREDENTIAL_FILE");
+  }
+  assertCredentialFreeContent(await readFile4(path5), "WORKSPACE_PREPARED_CREDENTIAL_CONTENT");
 }
 function boundedCommand(command, args, limits) {
   const invocation = args.length ? `${shellQuote2(command)} ${args.map((argument) => shellQuote2(argument)).join(" ")}` : command;
@@ -295944,6 +296132,7 @@ async function copySourceFile(sourceRoot, workspaceRoot, path5) {
 async function prepareReadOnlyPath(materializationRoot, workspaceRoot, prepared) {
   assertContainedRelativePath(prepared.target, "WORKSPACE_PREPARED_TARGET_INVALID");
   await assertRegularTree(prepared.source);
+  await assertPreparedTreeCredentialFree(prepared.source);
   const canonicalSource = await realpath4(prepared.source);
   const preparedRoot = join6(materializationRoot, "prepared");
   const destination = join6(preparedRoot, prepared.target);
@@ -296071,7 +296260,7 @@ async function createMaterializedWorkspace(input2) {
 
 // src/action/live-runtime.ts
 var executeFile3 = promisify4(execFile4);
-var trustedAssociations = /* @__PURE__ */ new Set(["COLLABORATOR", "MEMBER", "OWNER"]);
+var trustedAssociations2 = /* @__PURE__ */ new Set(["COLLABORATOR", "MEMBER", "OWNER"]);
 var GitHubRest = class {
   constructor(repository, token, apiUrl = "https://api.github.com", actionLogin) {
     this.repository = repository;
@@ -296259,6 +296448,28 @@ async function resolveProjectSkillFile(repositoryRoot, configuredPath) {
     const isSkillFile = index2 === segments.length;
     if (isSkillFile ? !metadata.isFile() : !metadata.isDirectory()) return void 0;
   }
+  const canonicalCandidate = await realpath5(candidate).catch(() => void 0);
+  return canonicalCandidate && isContained(canonicalRoot, canonicalCandidate) ? canonicalCandidate : void 0;
+}
+async function resolvePreparedDependencyPath(repositoryRoot, configuredPath) {
+  if (!configuredPath || isAbsolute9(configuredPath) || configuredPath.includes("\\") || /^[A-Za-z]:/u.test(configuredPath)) {
+    return void 0;
+  }
+  const segments = configuredPath.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    return void 0;
+  }
+  const canonicalRoot = await realpath5(repositoryRoot).catch(() => void 0);
+  if (!canonicalRoot) return void 0;
+  let candidate = canonicalRoot;
+  for (const segment of segments) {
+    candidate = resolve8(candidate, segment);
+    if (!isContained(canonicalRoot, candidate)) return void 0;
+    const metadata = await lstat4(candidate).catch(() => void 0);
+    if (!metadata || metadata.isSymbolicLink()) return void 0;
+  }
+  const finalMetadata = await lstat4(candidate).catch(() => void 0);
+  if (!finalMetadata?.isDirectory()) return void 0;
   const canonicalCandidate = await realpath5(candidate).catch(() => void 0);
   return canonicalCandidate && isContained(canonicalRoot, canonicalCandidate) ? canonicalCandidate : void 0;
 }
@@ -296532,11 +296743,19 @@ function createLiveActionDependencies(input2) {
       let materialized;
       try {
         assertSafeGitEnvironment(process.env);
+        const preparedPaths = await Promise.all(
+          inputs.preparedDependencyPaths.map(async (path5) => {
+            const source = await resolvePreparedDependencyPath(repositoryRoot, path5);
+            if (!source) throw new Error("MODEL_ROUTE_PREPARED_DEPENDENCY_INVALID");
+            return { source, target: path5 };
+          })
+        );
         materialized = await createMaterializedWorkspace({
           ...inputs.buildCommand ? { buildCommand: inputs.buildCommand } : {},
           sourceFiles: await sourceFiles(repositoryRoot),
           sourceRoot: repositoryRoot,
           environment: process.env,
+          preparedPaths,
           triageSkillPath
         });
         const activeWorkspace = materialized;
@@ -296680,12 +296899,26 @@ function createLiveActionDependencies(input2) {
     inspectModelCapabilities: async ({ inputs, route }) => {
       const repositoryRoot = input2.environment.GITHUB_WORKSPACE;
       const prSkillRequired = route.kind === "classify_fix_response" || inputs.autoPrOnFix;
-      const [triageSkillPath, prSkillPath, repositoryLabels, checkoutSafe] = await Promise.all([
+      const [
+        triageSkillPath,
+        prSkillPath,
+        preparedDependencyPaths,
+        repositoryLabels,
+        checkoutSafe
+      ] = await Promise.all([
         repositoryRoot && inputs.triageSkill ? resolveProjectSkillFile(repositoryRoot, inputs.triageSkill) : Promise.resolve(null),
         repositoryRoot && inputs.prSkill ? resolveProjectSkillFile(repositoryRoot, inputs.prSkill) : Promise.resolve(null),
+        repositoryRoot ? Promise.all(
+          inputs.preparedDependencyPaths.map(
+            (path5) => resolvePreparedDependencyPath(repositoryRoot, path5)
+          )
+        ) : Promise.resolve([]),
         readApi.listRepositoryLabels(),
         repositoryRoot ? checkoutCredentialHygieneSafe(repositoryRoot, input2.environment.GITHUB_SHA) : Promise.resolve(false)
       ]);
+      if (preparedDependencyPaths.some((path5) => !path5)) {
+        throw new Error("MODEL_ROUTE_PREPARED_DEPENDENCY_INVALID");
+      }
       const availableLabels = new Set(repositoryLabels);
       const requiredLabels = /* @__PURE__ */ new Set([
         ...Object.values(inputs.labels),
@@ -296795,8 +297028,8 @@ function createLiveActionDependencies(input2) {
         lifecycleLabels: input2.inputs.labels ?? defaultLifecycleLabels,
         maxModelEvents: input2.inputs.maxModelEvents,
         ...recovery ? { recovery } : {},
-        trustedActivation: trustedAssociations.has(event.actor.association),
-        trustedReset: trustedAssociations.has(event.actor.association)
+        trustedActivation: trustedAssociations2.has(event.actor.association),
+        trustedReset: trustedAssociations2.has(event.actor.association)
       };
     },
     async reconcile({ event, execution, lease, route, runtime }) {
@@ -297141,7 +297374,7 @@ function preflightAction(inputs, context2) {
 init_zod();
 var idSchema = external_exports.number().int().positive();
 var loginSchema = external_exports.string().min(1).max(100);
-var associationSchema = external_exports.enum([
+var associationSchema2 = external_exports.enum([
   "COLLABORATOR",
   "CONTRIBUTOR",
   "FIRST_TIMER",
@@ -297165,7 +297398,7 @@ var repositorySchema = external_exports.object({
   visibility: external_exports.enum(["internal", "private", "public"])
 });
 var issueSchema = external_exports.object({
-  author_association: associationSchema,
+  author_association: associationSchema2,
   body: external_exports.string().max(65536).nullable().optional(),
   id: idSchema,
   labels: external_exports.array(labelSchema).max(100),
@@ -297183,7 +297416,7 @@ var baseEventSchema = external_exports.object({
 });
 var commentEventSchema = baseEventSchema.extend({
   comment: external_exports.object({
-    author_association: associationSchema,
+    author_association: associationSchema2,
     body: external_exports.string().max(65536),
     created_at: external_exports.string().datetime({ offset: true }),
     id: idSchema,

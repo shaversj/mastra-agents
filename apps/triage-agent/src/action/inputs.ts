@@ -39,6 +39,7 @@ export interface ActionInputs {
   labels: LifecycleLabels;
   maxModelEvents: number;
   openaiApiKey?: string;
+  preparedDependencyPaths: string[];
   previewAllowedHosts: string[];
   previewCommand?: string;
   prFixVerifiedLabel: string;
@@ -226,6 +227,7 @@ export function parseActionInputs(environment: Environment = process.env): Actio
     labels,
     maxModelEvents: integerInput(environment, 'max-model-events', 4, 1, 20),
     ...(openaiApiKey ? { openaiApiKey } : {}),
+    preparedDependencyPaths: csvInput(environment, 'prepared-dependency-paths'),
     previewAllowedHosts: previewHosts(environment),
     ...(previewCommand ? { previewCommand } : {}),
     prFixVerifiedLabel: getInput(environment, 'pr-label-fix-verified') || 'fix verified',
