@@ -289,9 +289,10 @@ describe('sandbox isolation and tool boundary', () => {
     expect(readOnlyDependency?.stdout).toContain('PREPARED_READ_ONLY');
     expect(await readFile(preparedFile, 'utf8')).toBe('prepared\n');
 
-    await expect(sandbox.executeCommand('yes', [], { timeout: 5000 })).rejects.toThrow(
-      'WORKSPACE_OUTPUT_LIMIT',
-    );
+    await expect(
+      sandbox.executeCommand('node', ['-e', "process.stdout.write('x'.repeat(256 * 1024))"]),
+    ).rejects.toThrow('WORKSPACE_OUTPUT_LIMIT');
+    await expect(sandbox.executeCommand('true')).resolves.toMatchObject({ success: true });
   }, 30_000);
 });
 
