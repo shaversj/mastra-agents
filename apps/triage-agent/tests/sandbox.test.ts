@@ -111,6 +111,13 @@ describe('sandbox isolation and tool boundary', () => {
         type: 'bind',
       },
     ]);
+    expect(sandboxOptions?.ulimits).toEqual([
+      {
+        hard: 256,
+        name: 'nofile',
+        soft: 256,
+      },
+    ]);
     expect(workspaceOptions?.skills).toEqual(['triage/SKILL.md']);
     expect(workspaceOptions?.skillSource).toMatchObject({
       basePath: '/tmp/skills',

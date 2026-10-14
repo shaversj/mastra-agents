@@ -195,7 +195,6 @@ function boundedCommand(command: string, args: string[], limits: CommandLimits):
   const boundedInvocation = [
     `ulimit -t ${limits.cpuSeconds}`,
     `ulimit -v ${limits.addressSpaceKiB}`,
-    `ulimit -u ${limits.maxProcesses}`,
     `ulimit -n ${limits.maxOpenFiles}`,
     `ulimit -f ${limits.fileSizeBlocks}`,
     `exec /bin/bash -c ${shellQuote(outputBoundedInvocation)}`,
@@ -461,6 +460,8 @@ export function createSecureWorkspace<TWorkspace = Workspace>(input: {
       })),
     ],
     network: 'none',
+    // RLIMIT_NPROC is host-UID-wide on Linux and can prevent container init on shared runners.
+    // Docker's PID cgroup keeps this ceiling scoped to the sandbox instead.
     pidsLimit: commandLimits.maxProcesses,
     privileged: false,
     readonlyRootfs: true,
@@ -475,11 +476,6 @@ export function createSecureWorkspace<TWorkspace = Workspace>(input: {
         hard: commandLimits.maxOpenFiles,
         name: 'nofile',
         soft: commandLimits.maxOpenFiles,
-      },
-      {
-        hard: commandLimits.maxProcesses,
-        name: 'nproc',
-        soft: commandLimits.maxProcesses,
       },
     ],
     workingDirectory: '/workspace',
