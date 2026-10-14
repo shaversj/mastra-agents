@@ -195,6 +195,21 @@ describe('sandbox isolation and tool boundary', () => {
       expect(info?.metadata?.isolation).toBe('bwrap');
       const chainedCommand = await sandbox.executeCommand('true && false');
       expect(chainedCommand?.success).toBe(false);
+      const droppedCapabilities = await sandbox.executeCommand(
+        "awk '/^Cap(Inh|Prm|Eff|Bnd|Amb):/ { print }' /proc/self/status",
+      );
+      expect(
+        droppedCapabilities?.success,
+        JSON.stringify({
+          exitCode: droppedCapabilities?.exitCode,
+          stderr: droppedCapabilities?.stderr,
+          stdout: droppedCapabilities?.stdout,
+        }),
+      ).toBe(true);
+      expect(
+        droppedCapabilities?.stdout,
+        JSON.stringify({ stdout: droppedCapabilities?.stdout }),
+      ).toMatch(/^CapEff:\s*0+$/mu);
       const result = await sandbox.executeCommand(
         'test -z "$GITHUB_TOKEN" && test -z "$OPENAI_API_KEY" && test ! -e .git',
       );
